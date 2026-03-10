@@ -1168,3 +1168,510 @@ input[type="checkbox"] {
   display: none;
 }
 .sidebar-overlay.open { display: block; }
+
+/* ============================================
+   Gmail Inbox Page
+   ============================================ */
+.inbox-layout {
+  display: grid;
+  grid-template-columns: 340px 1fr;
+  height: calc(100vh - var(--header-height) - 120px);
+  background: var(--bg-card);
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+
+.inbox-sidebar {
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.inbox-toolbar {
+  padding: 12px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.inbox-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--bg-input);
+  border: 1px solid var(--border-input);
+  border-radius: var(--radius-sm);
+  padding: 0 10px;
+  flex: 1;
+}
+.inbox-search i { color: var(--text-muted); width: 16px; height: 16px; flex-shrink: 0; }
+.inbox-search input {
+  background: transparent;
+  border: none;
+  color: var(--text-primary);
+  outline: none;
+  padding: 7px 0;
+  width: 100%;
+  font-size: 13px;
+}
+
+.inbox-labels {
+  display: flex;
+  gap: 2px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+}
+.inbox-label-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: 100px;
+  white-space: nowrap;
+  transition: var(--transition);
+}
+.inbox-label-btn:hover { background: var(--bg-hover); color: var(--text-secondary); }
+.inbox-label-btn.active {
+  background: var(--accent);
+  color: #fff;
+}
+
+.inbox-list {
+  flex: 1;
+  overflow-y: auto;
+}
+
+.inbox-item {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  transition: var(--transition);
+  position: relative;
+}
+.inbox-item:hover { background: var(--bg-hover); }
+.inbox-item.selected {
+  background: rgba(79, 152, 163, 0.1);
+  border-left: 3px solid var(--accent);
+}
+.inbox-item.unread .inbox-item-from { font-weight: 600; color: var(--text-primary); }
+.inbox-item.unread .inbox-item-subject { color: var(--text-primary); }
+.inbox-item.unread::before {
+  content: '';
+  position: absolute;
+  left: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 6px;
+  height: 6px;
+  background: var(--accent);
+  border-radius: 50%;
+}
+.inbox-item-from {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  margin-bottom: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.inbox-item-subject {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin-bottom: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.inbox-item-snippet {
+  font-size: 12px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.inbox-item-date {
+  font-size: 11px;
+  color: var(--text-muted);
+  position: absolute;
+  top: 12px;
+  right: 12px;
+}
+
+/* Inbox Reader */
+.inbox-reader {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.inbox-reader-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--text-muted);
+}
+
+.email-detail-header {
+  padding: 20px 24px;
+  border-bottom: 1px solid var(--border);
+}
+.email-detail-subject {
+  font-size: 18px;
+  font-weight: 600;
+  margin-bottom: 12px;
+}
+.email-detail-meta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.email-detail-avatar {
+  width: 36px;
+  height: 36px;
+  background: var(--accent);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-weight: 600;
+  font-size: 14px;
+  flex-shrink: 0;
+}
+.email-detail-from {
+  font-size: 14px;
+  font-weight: 500;
+}
+.email-detail-email {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.email-detail-date {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-left: auto;
+}
+
+.email-detail-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 24px;
+}
+.email-detail-body-content {
+  font-size: 14px;
+  line-height: 1.7;
+  color: var(--text-secondary);
+}
+.email-detail-body-content a { color: var(--accent); }
+.email-detail-body-content img { max-width: 100%; border-radius: var(--radius-sm); }
+
+.email-detail-actions {
+  padding: 12px 24px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  gap: 8px;
+}
+
+.inbox-compose-modal .modal-body { display: flex; flex-direction: column; gap: 12px; }
+.inbox-compose-row { display: flex; align-items: center; gap: 8px; }
+.inbox-compose-row label { width: 50px; font-size: 13px; color: var(--text-muted); flex-shrink: 0; }
+.inbox-compose-row input {
+  flex: 1;
+  background: var(--bg-input);
+  border: 1px solid var(--border-input);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  padding: 8px 12px;
+  font-size: 13px;
+  outline: none;
+}
+.inbox-compose-row input:focus { border-color: var(--accent); }
+.inbox-compose-body {
+  background: var(--bg-input);
+  border: 1px solid var(--border-input);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  padding: 12px;
+  font-size: 13px;
+  min-height: 200px;
+  resize: vertical;
+  outline: none;
+}
+.inbox-compose-body:focus { border-color: var(--accent); }
+
+/* Gmail Connect */
+.gmail-connect-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 60px 20px;
+  text-align: center;
+  height: 100%;
+}
+.gmail-connect-card h3 { font-size: 20px; margin: 16px 0 8px; }
+.gmail-connect-card p { color: var(--text-muted); margin-bottom: 24px; font-size: 14px; }
+
+/* ============================================
+   Twilio SMS / Text Messages Page
+   ============================================ */
+.sms-layout {
+  display: grid;
+  grid-template-columns: 320px 1fr;
+  height: calc(100vh - var(--header-height) - 120px);
+  background: var(--bg-card);
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+
+.sms-sidebar {
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.sms-toolbar {
+  padding: 12px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.sms-toolbar .inbox-search { flex: 1; }
+
+.sms-list {
+  flex: 1;
+  overflow-y: auto;
+}
+
+.sms-contact {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  transition: var(--transition);
+}
+.sms-contact:hover { background: var(--bg-hover); }
+.sms-contact.selected {
+  background: rgba(79, 152, 163, 0.1);
+  border-left: 3px solid var(--accent);
+}
+.sms-contact.unread .sms-contact-name { font-weight: 600; color: var(--text-primary); }
+
+.sms-contact-avatar {
+  width: 36px;
+  height: 36px;
+  background: var(--bg-hover);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.sms-contact-avatar i { width: 18px; height: 18px; color: var(--text-muted); }
+
+.sms-contact-info {
+  flex: 1;
+  min-width: 0;
+}
+.sms-contact-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+.sms-contact-preview {
+  font-size: 12px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sms-contact-meta {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+  flex-shrink: 0;
+}
+.sms-contact-time {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.sms-badge {
+  font-size: 10px;
+  background: var(--accent);
+  color: #fff;
+  padding: 1px 6px;
+  border-radius: 100px;
+  font-weight: 600;
+}
+
+/* SMS Chat Panel */
+.sms-chat {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.sms-chat-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--text-muted);
+}
+
+.sms-chat-header {
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.sms-chat-contact {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.sms-chat-name {
+  font-size: 14px;
+  font-weight: 600;
+}
+.sms-chat-number {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.sms-messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.sms-empty-thread {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--text-muted);
+  font-size: 14px;
+}
+
+.sms-bubble {
+  max-width: 70%;
+  padding: 10px 14px;
+  border-radius: 16px;
+  font-size: 14px;
+  line-height: 1.5;
+  position: relative;
+}
+.sms-bubble.outbound {
+  align-self: flex-end;
+  background: var(--accent);
+  color: #fff;
+  border-bottom-right-radius: 4px;
+}
+.sms-bubble.inbound {
+  align-self: flex-start;
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  border-bottom-left-radius: 4px;
+}
+.sms-bubble-text {
+  word-wrap: break-word;
+}
+.sms-bubble-time {
+  font-size: 10px;
+  color: rgba(255,255,255,0.6);
+  margin-top: 4px;
+}
+.sms-bubble.inbound .sms-bubble-time {
+  color: var(--text-muted);
+}
+
+.sms-input-area {
+  padding: 12px 20px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.sms-input-area input {
+  flex: 1;
+  background: var(--bg-input);
+  border: 1px solid var(--border-input);
+  border-radius: 100px;
+  color: var(--text-primary);
+  padding: 10px 16px;
+  font-size: 14px;
+  outline: none;
+}
+.sms-input-area input:focus { border-color: var(--accent); }
+.sms-input-area .btn {
+  border-radius: 50%;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.sms-input-area .btn i { width: 18px; height: 18px; }
+
+/* Twilio Connect */
+.twilio-connect-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 60px 20px;
+  text-align: center;
+  height: 100%;
+}
+.twilio-connect-card h3 { font-size: 20px; margin: 16px 0 8px; }
+.twilio-connect-card p { color: var(--text-muted); margin-bottom: 24px; font-size: 14px; }
+
+/* New SMS Modal */
+.sms-new-row { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+.sms-new-row label { width: 50px; font-size: 13px; color: var(--text-muted); flex-shrink: 0; }
+.sms-new-row input {
+  flex: 1;
+  background: var(--bg-input);
+  border: 1px solid var(--border-input);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  padding: 8px 12px;
+  font-size: 13px;
+  outline: none;
+}
+.sms-new-row input:focus { border-color: var(--accent); }
+
+/* ============================================
+   Inbox & SMS Responsive
+   ============================================ */
+@media (max-width: 768px) {
+  .inbox-layout, .sms-layout {
+    grid-template-columns: 1fr;
+    height: auto;
+  }
+  .inbox-sidebar, .sms-sidebar {
+    max-height: 300px;
+  }
+  .inbox-reader, .sms-chat {
+    min-height: 400px;
+  }
+}

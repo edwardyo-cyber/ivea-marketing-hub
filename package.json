@@ -1,0 +1,9 @@
+{
+  "name": "ivea-marketing-hub",
+  "version": "1.0.0",
+  "private": true,
+  "dependencies": {
+    "googleapis": "^144.0.0",
+    "twilio": "^5.4.0"
+  }
+}

@@ -208,6 +208,8 @@ const NAV_ITEMS = [
     { id: 'email-sms', icon: 'mail', label: 'Email & SMS' },
   ]},
   { section: 'Communications', items: [
+    { id: 'inbox', icon: 'inbox', label: 'Inbox' },
+    { id: 'text-messages', icon: 'smartphone', label: 'Text Messages' },
     { id: 'reviews', icon: 'message-square', label: 'Reviews' },
   ]},
   { section: 'Analytics', items: [
@@ -297,6 +299,8 @@ function navigate(page) {
     'campaigns': renderCampaigns,
     'media': renderMedia,
     'email-sms': renderEmailSms,
+    'inbox': renderInbox,
+    'text-messages': renderTextMessages,
     'reviews': renderReviews,
     'reports': renderReports,
     'social-accounts': renderSocialAccounts,
@@ -2530,9 +2534,495 @@ async function sendAIMessage() {
 }
 
 // ============================================
+// Gmail Inbox Page
+// ============================================
+let inboxEmails = [];
+let inboxSelected = null;
+let inboxLabel = 'INBOX';
+let inboxConnected = false;
+
+async function renderInbox(container) {
+  container.innerHTML = `
+    <div class="page-header"><h2>Inbox</h2><p class="page-subtitle">Read and reply to emails directly from the hub</p></div>
+    <div id="inbox-root"><div class="loading"><div class="spinner"></div></div></div>
+  `;
+  lucide.createIcons();
+  
+  // Check connection
+  try {
+    const res = await fetch('/api/gmail?action=profile');
+    const data = await res.json();
+    if (data.needsAuth || res.status === 401) {
+      renderInboxConnect(container);
+      return;
+    }
+    inboxConnected = true;
+    await loadInboxMessages();
+    renderInboxUI();
+  } catch {
+    renderInboxConnect(container);
+  }
+}
+
+function renderInboxConnect(container) {
+  $('#inbox-root').innerHTML = `
+    <div class="empty-state" style="padding:60px 20px;text-align:center">
+      <div style="font-size:48px;margin-bottom:16px"><i data-lucide="mail" style="width:48px;height:48px;color:#4f98a3"></i></div>
+      <h3 style="margin-bottom:8px">Connect Gmail</h3>
+      <p style="color:#999;margin-bottom:24px">Link your Gmail account to read and send emails from the Marketing Hub.</p>
+      <a href="/api/gmail-auth" class="btn btn-primary" style="text-decoration:none">Connect Gmail Account</a>
+    </div>
+  `;
+  lucide.createIcons();
+}
+
+async function loadInboxMessages(q = '') {
+  try {
+    const url = `/api/gmail?action=list&label=${inboxLabel}&max=30${q ? '&q=' + encodeURIComponent(q) : ''}`;
+    const res = await fetch(url);
+    const data = await res.json();
+    if (data.needsAuth) { renderInboxConnect($('#page-content')); return; }
+    inboxEmails = data.messages || [];
+  } catch { inboxEmails = []; }
+}
+
+function renderInboxUI() {
+  const root = $('#inbox-root');
+  root.innerHTML = `
+    <div class="inbox-layout">
+      <div class="inbox-sidebar">
+        <div class="inbox-toolbar">
+          <div class="inbox-search">
+            <i data-lucide="search"></i>
+            <input type="text" id="inbox-search-input" placeholder="Search emails...">
+          </div>
+          <button class="btn btn-primary btn-sm" id="inbox-compose-btn"><i data-lucide="plus"></i> Compose</button>
+        </div>
+        <div class="inbox-labels">
+          ${['INBOX','SENT','STARRED','DRAFT','SPAM'].map(l => `<button class="inbox-label-btn${inboxLabel === l ? ' active' : ''}" data-label="${l}">${l.charAt(0) + l.slice(1).toLowerCase()}</button>`).join('')}
+        </div>
+        <div class="inbox-list" id="inbox-list">
+          ${inboxEmails.length === 0 ? '<div class="empty-state" style="padding:40px 16px"><p>No emails found</p></div>' :
+            inboxEmails.map(e => `
+              <div class="inbox-item${e.isUnread ? ' unread' : ''}${inboxSelected === e.id ? ' selected' : ''}" data-id="${e.id}">
+                <div class="inbox-item-from">${escapeHtml((e.from || '').replace(/<.*>/, '').trim() || e.from)}</div>
+                <div class="inbox-item-subject">${escapeHtml(e.subject || '(no subject)')}</div>
+                <div class="inbox-item-snippet">${escapeHtml(e.snippet || '')}</div>
+                <div class="inbox-item-date">${formatEmailDate(e.date)}</div>
+              </div>
+            `).join('')}
+        </div>
+      </div>
+      <div class="inbox-reader" id="inbox-reader">
+        <div class="inbox-reader-empty"><i data-lucide="mail-open" style="width:48px;height:48px;color:#333"></i><p style="color:#666;margin-top:12px">Select an email to read</p></div>
+      </div>
+    </div>
+  `;
+  lucide.createIcons();
+  
+  // Event: click email
+  $$('.inbox-item').forEach(el => {
+    el.onclick = () => openEmail(el.dataset.id);
+  });
+  // Event: label switch
+  $$('.inbox-label-btn').forEach(btn => {
+    btn.onclick = async () => {
+      inboxLabel = btn.dataset.label;
+      inboxSelected = null;
+      await loadInboxMessages();
+      renderInboxUI();
+    };
+  });
+  // Event: search
+  const si = $('#inbox-search-input');
+  let searchTimeout;
+  si.oninput = () => {
+    clearTimeout(searchTimeout);
+    searchTimeout = setTimeout(async () => {
+      await loadInboxMessages(si.value);
+      renderInboxUI();
+      $('#inbox-search-input').value = si.value;
+      $('#inbox-search-input').focus();
+    }, 500);
+  };
+  // Event: compose
+  $('#inbox-compose-btn').onclick = () => openComposeModal();
+}
+
+async function openEmail(id) {
+  inboxSelected = id;
+  // Highlight in list
+  $$('.inbox-item').forEach(el => el.classList.toggle('selected', el.dataset.id === id));
+  
+  const reader = $('#inbox-reader');
+  reader.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+  
+  try {
+    const res = await fetch(`/api/gmail?action=get&id=${id}`);
+    const email = await res.json();
+    if (email.error) { reader.innerHTML = `<div class="empty-state"><p>${email.error}</p></div>`; return; }
+    
+    reader.innerHTML = `
+      <div class="email-header">
+        <h3 class="email-subject">${escapeHtml(email.subject || '(no subject)')}</h3>
+        <div class="email-meta">
+          <div><strong>From:</strong> ${escapeHtml(email.from)}</div>
+          <div><strong>To:</strong> ${escapeHtml(email.to)}</div>
+          <div><strong>Date:</strong> ${formatEmailDate(email.date)}</div>
+        </div>
+        <div class="email-actions">
+          <button class="btn btn-sm btn-primary" id="reply-btn"><i data-lucide="reply"></i> Reply</button>
+          <button class="btn btn-sm" id="forward-btn"><i data-lucide="forward"></i> Forward</button>
+        </div>
+      </div>
+      <div class="email-body">${email.body || '<p style="color:#666">No content</p>'}</div>
+    `;
+    lucide.createIcons();
+    
+    // Mark as read in the list
+    const listItem = $(`.inbox-item[data-id="${id}"]`);
+    if (listItem) listItem.classList.remove('unread');
+    
+    // Reply button
+    $('#reply-btn').onclick = () => openComposeModal(email.from, `Re: ${email.subject}`, '', email.id, email.threadId);
+    $('#forward-btn').onclick = () => openComposeModal('', `Fwd: ${email.subject}`, email.body);
+  } catch (err) {
+    reader.innerHTML = `<div class="empty-state"><p>Error loading email</p></div>`;
+  }
+}
+
+function openComposeModal(to = '', subject = '', body = '', inReplyTo = '', threadId = '') {
+  openModal('Compose Email', `
+    <div class="form-group"><label>To</label><input type="email" id="compose-to" class="form-input" value="${escapeHtml(to.replace(/<.*>/, '').includes('@') ? to.match(/[\w.-]+@[\w.-]+/)?.[0] || to : to)}" placeholder="recipient@example.com"></div>
+    <div class="form-group"><label>Subject</label><input type="text" id="compose-subject" class="form-input" value="${escapeHtml(subject)}"></div>
+    <div class="form-group"><label>Message</label><textarea id="compose-body" class="form-input" rows="10" placeholder="Write your email...">${body ? '\n\n--- Original Message ---\n' : ''}</textarea></div>
+  `, `
+    <button class="btn" onclick="closeModal()">Cancel</button>
+    <button class="btn btn-primary" id="send-email-btn">Send Email</button>
+  `);
+  
+  setTimeout(() => {
+    $('#send-email-btn').onclick = async () => {
+      const btn = $('#send-email-btn');
+      btn.disabled = true;
+      btn.textContent = 'Sending...';
+      try {
+        const res = await fetch('/api/gmail?action=send', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            to: $('#compose-to').value,
+            subject: $('#compose-subject').value,
+            body: $('#compose-body').value.replace(/\n/g, '<br>'),
+            inReplyTo,
+            threadId,
+          }),
+        });
+        const data = await res.json();
+        if (data.success) {
+          showToast('Email sent successfully', 'success');
+          closeModal();
+          await loadInboxMessages();
+          renderInboxUI();
+        } else {
+          showToast(data.error || 'Failed to send', 'error');
+          btn.disabled = false;
+          btn.textContent = 'Send Email';
+        }
+      } catch {
+        showToast('Failed to send email', 'error');
+        btn.disabled = false;
+        btn.textContent = 'Send Email';
+      }
+    };
+  }, 100);
+}
+
+function formatEmailDate(dateStr) {
+  if (!dateStr) return '';
+  const d = new Date(dateStr);
+  const now = new Date();
+  const diff = now - d;
+  if (diff < 86400000 && d.getDate() === now.getDate()) {
+    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  }
+  if (diff < 604800000) {
+    return d.toLocaleDateString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' });
+  }
+  return d.toLocaleDateString([], { month: 'short', day: 'numeric', year: d.getFullYear() !== now.getFullYear() ? 'numeric' : undefined });
+}
+
+// ============================================
+// Text Messages (Twilio SMS) Page
+// ============================================
+let smsConversations = [];
+let smsSelectedPhone = null;
+let smsMessages = [];
+let smsTwilioNumber = '';
+
+async function renderTextMessages(container) {
+  container.innerHTML = `
+    <div class="page-header"><h2>Text Messages</h2><p class="page-subtitle">Send and receive SMS via Twilio</p></div>
+    <div id="sms-root"><div class="loading"><div class="spinner"></div></div></div>
+  `;
+  lucide.createIcons();
+  
+  try {
+    const res = await fetch('/api/sms?action=status');
+    const data = await res.json();
+    if (data.needsSetup || data.error) {
+      renderSmsSetup();
+      return;
+    }
+    smsTwilioNumber = data.twilioNumber;
+    await loadSmsConversations();
+    renderSmsUI();
+  } catch {
+    renderSmsSetup();
+  }
+}
+
+function renderSmsSetup() {
+  $('#sms-root').innerHTML = `
+    <div class="empty-state" style="padding:60px 20px;text-align:center">
+      <div style="font-size:48px;margin-bottom:16px"><i data-lucide="smartphone" style="width:48px;height:48px;color:#4f98a3"></i></div>
+      <h3 style="margin-bottom:8px">Connect Twilio</h3>
+      <p style="color:#999;margin-bottom:24px">Add your Twilio credentials in Vercel environment variables to enable SMS messaging.</p>
+      <p style="color:#666;font-size:13px">Required: TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_PHONE_NUMBER</p>
+    </div>
+  `;
+  lucide.createIcons();
+}
+
+async function loadSmsConversations() {
+  try {
+    const res = await fetch('/api/sms?action=conversations');
+    const data = await res.json();
+    smsConversations = data.conversations || [];
+    smsTwilioNumber = data.twilioNumber || smsTwilioNumber;
+  } catch { smsConversations = []; }
+}
+
+function renderSmsUI() {
+  const root = $('#sms-root');
+  root.innerHTML = `
+    <div class="sms-layout">
+      <div class="sms-sidebar">
+        <div class="sms-toolbar">
+          <div class="inbox-search">
+            <i data-lucide="search"></i>
+            <input type="text" id="sms-search-input" placeholder="Search contacts...">
+          </div>
+          <button class="btn btn-primary btn-sm" id="sms-new-btn"><i data-lucide="plus"></i> New</button>
+        </div>
+        <div class="sms-list" id="sms-list">
+          ${smsConversations.length === 0 ? '<div class="empty-state" style="padding:40px 16px"><p>No conversations yet</p></div>' :
+            smsConversations.map(c => `
+              <div class="sms-contact${smsSelectedPhone === c.phone ? ' selected' : ''}${c.unread ? ' unread' : ''}" data-phone="${c.phone}">
+                <div class="sms-contact-avatar"><i data-lucide="user"></i></div>
+                <div class="sms-contact-info">
+                  <div class="sms-contact-name">${formatPhone(c.phone)}</div>
+                  <div class="sms-contact-preview">${escapeHtml(c.lastMessage || '').substring(0, 50)}</div>
+                </div>
+                <div class="sms-contact-meta">
+                  <div class="sms-contact-time">${formatSmsDate(c.lastDate)}</div>
+                  ${c.direction === 'inbound' ? '<div class="sms-badge">New</div>' : ''}
+                </div>
+              </div>
+            `).join('')}
+        </div>
+      </div>
+      <div class="sms-chat" id="sms-chat">
+        <div class="sms-chat-empty"><i data-lucide="message-circle" style="width:48px;height:48px;color:#333"></i><p style="color:#666;margin-top:12px">Select a conversation or start a new one</p></div>
+      </div>
+    </div>
+  `;
+  lucide.createIcons();
+  
+  // Click contact
+  $$('.sms-contact').forEach(el => {
+    el.onclick = () => openSmsThread(el.dataset.phone);
+  });
+  // Search filter
+  $('#sms-search-input').oninput = (e) => {
+    const q = e.target.value.toLowerCase();
+    $$('.sms-contact').forEach(el => {
+      el.style.display = el.dataset.phone.includes(q) || el.textContent.toLowerCase().includes(q) ? '' : 'none';
+    });
+  };
+  // New conversation
+  $('#sms-new-btn').onclick = () => openNewSmsModal();
+}
+
+async function openSmsThread(phone) {
+  smsSelectedPhone = phone;
+  $$('.sms-contact').forEach(el => el.classList.toggle('selected', el.dataset.phone === phone));
+  
+  const chat = $('#sms-chat');
+  chat.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+  
+  try {
+    const res = await fetch(`/api/sms?action=thread&phone=${encodeURIComponent(phone)}`);
+    const data = await res.json();
+    smsMessages = data.messages || [];
+    renderSmsChat(phone);
+  } catch {
+    chat.innerHTML = '<div class="empty-state"><p>Error loading messages</p></div>';
+  }
+}
+
+function renderSmsChat(phone) {
+  const chat = $('#sms-chat');
+  chat.innerHTML = `
+    <div class="sms-chat-header">
+      <div class="sms-chat-contact">
+        <div class="sms-contact-avatar"><i data-lucide="user"></i></div>
+        <div>
+          <div class="sms-chat-name">${formatPhone(phone)}</div>
+          <div class="sms-chat-number">${phone}</div>
+        </div>
+      </div>
+    </div>
+    <div class="sms-messages" id="sms-messages">
+      ${smsMessages.length === 0 ? '<div class="sms-empty-thread"><p>No messages yet. Send the first one.</p></div>' :
+        smsMessages.map(m => `
+          <div class="sms-bubble ${m.direction}">
+            <div class="sms-bubble-text">${escapeHtml(m.body)}</div>
+            <div class="sms-bubble-time">${new Date(m.date).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}${m.direction === 'outbound' ? ' · ' + m.status : ''}</div>
+          </div>
+        `).join('')}
+    </div>
+    <div class="sms-input-area">
+      <input type="text" id="sms-input" placeholder="Type a message..." autocomplete="off">
+      <button class="btn btn-primary" id="sms-send-btn"><i data-lucide="send"></i></button>
+    </div>
+  `;
+  lucide.createIcons();
+  
+  // Scroll to bottom
+  const msgs = $('#sms-messages');
+  msgs.scrollTop = msgs.scrollHeight;
+  
+  // Send message
+  const sendMsg = async () => {
+    const input = $('#sms-input');
+    const body = input.value.trim();
+    if (!body) return;
+    input.value = '';
+    
+    // Optimistic add
+    const bubble = document.createElement('div');
+    bubble.className = 'sms-bubble outbound';
+    bubble.innerHTML = `<div class="sms-bubble-text">${escapeHtml(body)}</div><div class="sms-bubble-time">Sending...</div>`;
+    msgs.appendChild(bubble);
+    msgs.scrollTop = msgs.scrollHeight;
+    
+    try {
+      const res = await fetch('/api/sms?action=send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ to: phone, body }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        bubble.querySelector('.sms-bubble-time').textContent = 'Just now · ' + data.status;
+        showToast('Message sent', 'success');
+      } else {
+        bubble.querySelector('.sms-bubble-time').textContent = 'Failed';
+        bubble.classList.add('failed');
+        showToast(data.error || 'Failed to send', 'error');
+      }
+    } catch {
+      bubble.querySelector('.sms-bubble-time').textContent = 'Failed';
+      bubble.classList.add('failed');
+      showToast('Failed to send message', 'error');
+    }
+  };
+  
+  $('#sms-send-btn').onclick = sendMsg;
+  $('#sms-input').onkeydown = (e) => { if (e.key === 'Enter') sendMsg(); };
+  $('#sms-input').focus();
+}
+
+function openNewSmsModal() {
+  openModal('New Message', `
+    <div class="form-group"><label>Phone Number</label><input type="tel" id="new-sms-phone" class="form-input" placeholder="+1 (555) 123-4567"></div>
+    <div class="form-group"><label>Message</label><textarea id="new-sms-body" class="form-input" rows="4" placeholder="Type your message..."></textarea></div>
+  `, `
+    <button class="btn" onclick="closeModal()">Cancel</button>
+    <button class="btn btn-primary" id="new-sms-send">Send Message</button>
+  `);
+  
+  setTimeout(() => {
+    $('#new-sms-send').onclick = async () => {
+      const phone = $('#new-sms-phone').value.trim();
+      const body = $('#new-sms-body').value.trim();
+      if (!phone || !body) { showToast('Phone and message required', 'error'); return; }
+      
+      const btn = $('#new-sms-send');
+      btn.disabled = true;
+      btn.textContent = 'Sending...';
+      
+      try {
+        const res = await fetch('/api/sms?action=send', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ to: phone, body }),
+        });
+        const data = await res.json();
+        if (data.success) {
+          showToast('Message sent', 'success');
+          closeModal();
+          smsSelectedPhone = phone;
+          await loadSmsConversations();
+          renderSmsUI();
+          openSmsThread(phone);
+        } else {
+          showToast(data.error || 'Failed to send', 'error');
+          btn.disabled = false;
+          btn.textContent = 'Send Message';
+        }
+      } catch {
+        showToast('Failed to send', 'error');
+        btn.disabled = false;
+        btn.textContent = 'Send Message';
+      }
+    };
+  }, 100);
+}
+
+function formatPhone(phone) {
+  if (!phone) return '';
+  const clean = phone.replace(/\D/g, '');
+  if (clean.length === 11 && clean[0] === '1') {
+    return `(${clean.slice(1,4)}) ${clean.slice(4,7)}-${clean.slice(7)}`;
+  }
+  if (clean.length === 10) {
+    return `(${clean.slice(0,3)}) ${clean.slice(3,6)}-${clean.slice(6)}`;
+  }
+  return phone;
+}
+
+function formatSmsDate(dateStr) {
+  if (!dateStr) return '';
+  const d = new Date(dateStr);
+  const now = new Date();
+  const diff = now - d;
+  if (diff < 86400000 && d.getDate() === now.getDate()) return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  if (diff < 604800000) return d.toLocaleDateString([], { weekday: 'short' });
+  return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+}
+
+// ============================================
 // Init
 // ============================================
 document.addEventListener('DOMContentLoaded', () => {
+  // Check for Gmail callback redirect
+  const params = new URLSearchParams(window.location.search);
+  if (params.get('page') === 'inbox' && params.get('connected') === 'true') {
+    window.history.replaceState({}, '', '/');
+    currentPage = 'inbox';
+  }
   initAuth();
 });
 
