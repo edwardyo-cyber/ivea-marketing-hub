@@ -1,9 +1,9 @@
 /* ============================================
    IVEA Marketing Hub — Complete Stylesheet
-   Dark Theme (MUI CRM Style)
+   Dark / Light Theme (MUI CRM Style)
    ============================================ */
 
-/* ---------- CSS Variables ---------- */
+/* ---------- CSS Variables (Dark — default) ---------- */
 :root {
   --bg-main: #0a0a0a;
   --bg-card: #111111;
@@ -30,6 +30,52 @@
   --font: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
   --shadow: 0 4px 24px rgba(0,0,0,0.3);
   --transition: 0.2s ease;
+}
+
+/* ---------- Light Theme Override ---------- */
+[data-theme="light"] {
+  --bg-main: #f4f5f7;
+  --bg-card: #ffffff;
+  --bg-sidebar: #ffffff;
+  --bg-input: #f4f5f7;
+  --bg-hover: #eef0f3;
+  --bg-stripe: #f9fafb;
+  --border: #e2e4e9;
+  --border-input: #d1d5db;
+  --text-primary: #1a1a1a;
+  --text-secondary: #555555;
+  --text-muted: #888888;
+  --accent: #3a8591;
+  --accent-hover: #2e6f79;
+  --success: #16a34a;
+  --warning: #d97706;
+  --danger: #dc2626;
+  --info: #2563eb;
+  --purple: #7c3aed;
+  --shadow: 0 4px 24px rgba(0,0,0,0.08);
+}
+[data-theme="light"] ::-webkit-scrollbar-track { background: #f4f5f7; }
+[data-theme="light"] ::-webkit-scrollbar-thumb { background: #ccc; }
+[data-theme="light"] ::-webkit-scrollbar-thumb:hover { background: #aaa; }
+
+/* Smooth transition between themes */
+html, body, .sidebar, .app-header, .page-content,
+.modal, .card, .data-table, .data-table th, .data-table td,
+.nav-item, .sidebar-user, .sidebar-bottom, .form-input,
+.form-select, .form-textarea, .btn-secondary, .badge,
+.stat-card, .ai-panel, .notification-panel, .inbox-list,
+.inbox-reader, .sms-list, .sms-chat, .brand-card,
+.location-card, .modal-overlay {
+  transition: background-color 0.25s ease, color 0.25s ease, border-color 0.25s ease;
+}
+
+/* Light mode sidebar border */
+[data-theme="light"] .sidebar {
+  border-right: 1px solid var(--border);
+}
+/* Light mode header bottom border */
+[data-theme="light"] .app-header {
+  border-bottom: 1px solid var(--border);
 }
 
 /* ---------- Reset ---------- */
@@ -190,7 +236,7 @@ input, select, textarea { font-family: var(--font); }
 .nav-item i, .nav-item svg { width: 18px; height: 18px; flex-shrink: 0; }
 .sidebar-user {
   padding: 12px 16px;
-  border-top: 1px solid var(--border);
+  border-top: none;
   display: flex;
   align-items: center;
   gap: 10px;
@@ -217,6 +263,54 @@ input, select, textarea { font-family: var(--font); }
   transition: color var(--transition);
 }
 .logout-btn:hover { color: var(--danger); }
+
+/* ---------- Theme Toggle ---------- */
+.sidebar-bottom {
+  border-top: 1px solid var(--border);
+  padding: 8px 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.theme-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text-secondary);
+  user-select: none;
+  padding: 4px 0;
+}
+.theme-toggle:hover { color: var(--text-primary); }
+.theme-toggle-track {
+  width: 36px;
+  height: 20px;
+  border-radius: 10px;
+  background: var(--border-input);
+  position: relative;
+  transition: background var(--transition);
+  flex-shrink: 0;
+}
+.theme-toggle-track::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--text-primary);
+  transition: transform var(--transition), background var(--transition);
+}
+[data-theme="light"] .theme-toggle-track {
+  background: var(--accent);
+}
+[data-theme="light"] .theme-toggle-track::after {
+  transform: translateX(16px);
+  background: #fff;
+}
+.theme-icon { width: 14px; height: 14px; }
 
 /* ---------- Main Wrapper ---------- */
 .main-wrapper {
@@ -364,7 +458,7 @@ input, select, textarea { font-family: var(--font); }
 .btn-primary { background: var(--accent); color: #fff; }
 .btn-primary:hover { background: var(--accent-hover); }
 .btn-secondary { background: var(--bg-hover); color: var(--text-primary); border: 1px solid var(--border); }
-.btn-secondary:hover { background: #2a2a2a; }
+.btn-secondary:hover { background: var(--bg-hover); }
 .btn-danger { background: var(--danger); color: #fff; }
 .btn-danger:hover { background: #dc2626; }
 .btn-success { background: var(--success); color: #fff; }

@@ -2291,12 +2291,15 @@ async function renderReports(container) {
   `;
 
   // Charts
+  const isLight = document.documentElement.getAttribute('data-theme') === 'light';
+  const chartTextColor = isLight ? '#555' : '#999';
+  const chartGridColor = isLight ? '#e2e4e9' : '#222';
   const chartOpts = {
     responsive: true,
-    plugins: { legend: { labels: { color: '#999' } } },
+    plugins: { legend: { labels: { color: chartTextColor } } },
     scales: {
-      x: { ticks: { color: '#999' }, grid: { color: '#222' } },
-      y: { ticks: { color: '#999' }, grid: { color: '#222' } },
+      x: { ticks: { color: chartTextColor }, grid: { color: chartGridColor } },
+      y: { ticks: { color: chartTextColor }, grid: { color: chartGridColor } },
     }
   };
 
@@ -2333,7 +2336,7 @@ async function renderReports(container) {
         labels: Object.keys(stageCounts),
         datasets: [{ data: Object.values(stageCounts), backgroundColor: ['#666', '#3b82f6', '#f59e0b', '#22c55e', '#8b5cf6'] }]
       },
-      options: { responsive: true, plugins: { legend: { labels: { color: '#999' } } } },
+      options: { responsive: true, plugins: { legend: { labels: { color: chartTextColor } } } },
     });
   }
 
@@ -3299,7 +3302,7 @@ function renderInboxUI() {
         </div>
       </div>
       <div class="inbox-reader" id="inbox-reader">
-        <div class="inbox-reader-empty"><i data-lucide="mail-open" style="width:48px;height:48px;color:#333"></i><p style="color:#666;margin-top:12px">Select an email to read</p></div>
+        <div class="inbox-reader-empty"><i data-lucide="mail-open" style="width:48px;height:48px;color:var(--text-muted)"></i><p style="color:var(--text-secondary);margin-top:12px">Select an email to read</p></div>
       </div>
     </div>
   `;
@@ -3518,7 +3521,7 @@ function renderSmsUI() {
         </div>
       </div>
       <div class="sms-chat" id="sms-chat">
-        <div class="sms-chat-empty"><i data-lucide="message-circle" style="width:48px;height:48px;color:#333"></i><p style="color:#666;margin-top:12px">Select a conversation or start a new one</p></div>
+        <div class="sms-chat-empty"><i data-lucide="message-circle" style="width:48px;height:48px;color:var(--text-muted)"></i><p style="color:var(--text-secondary);margin-top:12px">Select a conversation or start a new one</p></div>
       </div>
     </div>
   `;
@@ -3699,9 +3702,69 @@ function formatSmsDate(dateStr) {
 }
 
 // ============================================
+// Theme Toggle (Light / Dark)
+// ============================================
+function initTheme() {
+  const saved = localStorage.getItem('ivea-theme') || 'dark';
+  applyTheme(saved);
+  const toggle = document.getElementById('theme-toggle');
+  if (toggle) toggle.addEventListener('click', () => {
+    const current = document.documentElement.getAttribute('data-theme') || 'dark';
+    const next = current === 'dark' ? 'light' : 'dark';
+    applyTheme(next);
+    localStorage.setItem('ivea-theme', next);
+  });
+}
+
+function applyTheme(theme) {
+  if (theme === 'light') {
+    document.documentElement.setAttribute('data-theme', 'light');
+  } else {
+    document.documentElement.removeAttribute('data-theme');
+  }
+  const darkIcon = document.getElementById('theme-icon-dark');
+  const lightIcon = document.getElementById('theme-icon-light');
+  const label = document.getElementById('theme-label');
+  if (darkIcon) darkIcon.style.display = theme === 'dark' ? '' : 'none';
+  if (lightIcon) lightIcon.style.display = theme === 'light' ? '' : 'none';
+  if (label) label.textContent = theme === 'dark' ? 'Dark' : 'Light';
+  // Re-render chart colors if any charts exist
+  updateChartTheme(theme);
+}
+
+function getThemeColor(varName) {
+  return getComputedStyle(document.documentElement).getPropertyValue(varName).trim();
+}
+
+function updateChartTheme(theme) {
+  // Update any active Chart.js instances
+  if (typeof Chart !== 'undefined' && Chart.instances) {
+    const gridColor = theme === 'light' ? '#e2e4e9' : '#222';
+    const textColor = theme === 'light' ? '#555' : '#999';
+    Object.values(Chart.instances).forEach(chart => {
+      if (chart.options.scales) {
+        if (chart.options.scales.x) {
+          chart.options.scales.x.ticks = { ...chart.options.scales.x.ticks, color: textColor };
+          chart.options.scales.x.grid = { ...chart.options.scales.x.grid, color: gridColor };
+        }
+        if (chart.options.scales.y) {
+          chart.options.scales.y.ticks = { ...chart.options.scales.y.ticks, color: textColor };
+          chart.options.scales.y.grid = { ...chart.options.scales.y.grid, color: gridColor };
+        }
+      }
+      if (chart.options.plugins && chart.options.plugins.legend && chart.options.plugins.legend.labels) {
+        chart.options.plugins.legend.labels.color = textColor;
+      }
+      chart.update('none');
+    });
+  }
+}
+
+// ============================================
 // Init
 // ============================================
 document.addEventListener('DOMContentLoaded', () => {
+  initTheme();
   // Check for Gmail callback redirect
   const params = new URLSearchParams(window.location.search);
   if (params.get('page') === 'inbox' && params.get('connected') === 'true') {
