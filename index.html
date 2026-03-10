@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<!--
+   ______                            __
+  / ____/___  ____ ___  ____  __  __/ /____  _____
+ / /   / __ \/ __ `__ \/ __ \/ / / / __/ _ \/ ___/
+/ /___/ /_/ / / / / / / /_/ / /_/ / /_/  __/ /
+\____/\____/_/ /_/ /_/ .___/\__,_/\__/\___/_/
+                    /_/
+        Created with Perplexity Computer
+        https://www.perplexity.ai/computer
+-->
+<meta name="generator" content="Perplexity Computer">
+<meta name="author" content="Perplexity Computer">
+<meta property="og:see_also" content="https://www.perplexity.ai/computer">
+<link rel="author" href="https://www.perplexity.ai/computer">
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>IVEA Marketing Hub</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://unpkg.com/lucide@latest"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <!-- Login Screen -->
+  <div id="login-screen" class="login-screen">
+    <div class="login-card">
+      <div class="login-logo">
+        <svg width="48" height="48" viewBox="0 0 48 48" fill="none" aria-label="IVEA Logo">
+          <rect width="48" height="48" rx="12" fill="#4f98a3" opacity="0.15"/>
+          <path d="M12 14h4v20h-4zM20 14l6 20h-4l-6-20zM30 14h8v4h-8v4h6v4h-6v4h8v4h-12V14zM42 14h4v20h-4zM42 14h-6l3-6 3 6z" fill="#4f98a3"/>
+        </svg>
+        <h1>IVEA Marketing Hub</h1>
+        <p class="login-subtitle">Restaurant Group Marketing Platform</p>
+      </div>
+      <div class="login-form">
+        <label class="login-label">Enter your 4-digit code</label>
+        <div class="code-inputs">
+          <input type="text" maxlength="1" class="code-input" data-index="0" inputmode="numeric" autocomplete="off">
+          <input type="text" maxlength="1" class="code-input" data-index="1" inputmode="numeric" autocomplete="off">
+          <input type="text" maxlength="1" class="code-input" data-index="2" inputmode="numeric" autocomplete="off">
+          <input type="text" maxlength="1" class="code-input" data-index="3" inputmode="numeric" autocomplete="off">
+        </div>
+        <div id="login-error" class="login-error"></div>
+        <button id="login-btn" class="btn btn-primary login-btn">Sign In</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- App Shell -->
+  <div id="app-shell" class="app-shell hidden">
+    <!-- Sidebar -->
+    <aside id="sidebar" class="sidebar">
+      <div class="sidebar-header">
+        <svg width="32" height="32" viewBox="0 0 48 48" fill="none" aria-label="IVEA">
+          <rect width="48" height="48" rx="12" fill="#4f98a3" opacity="0.15"/>
+          <path d="M12 14h4v20h-4zM20 14l6 20h-4l-6-20zM30 14h8v4h-8v4h6v4h-6v4h8v4h-12V14zM42 14h4v20h-4zM42 14h-6l3-6 3 6z" fill="#4f98a3"/>
+        </svg>
+        <span class="sidebar-title">IVEA Hub</span>
+      </div>
+      <nav class="sidebar-nav" id="sidebar-nav"></nav>
+      <div class="sidebar-user" id="sidebar-user"></div>
+    </aside>
+
+    <!-- Main Content -->
+    <div class="main-wrapper">
+      <!-- Header -->
+      <header class="app-header">
+        <button class="hamburger-btn" id="hamburger-btn">
+          <i data-lucide="menu"></i>
+        </button>
+        <div class="search-bar" id="global-search">
+          <i data-lucide="search"></i>
+          <input type="text" placeholder='Search everything... (press "/" )' id="search-input">
+          <div class="search-results" id="search-results"></div>
+        </div>
+        <div class="header-actions">
+          <button class="header-btn" id="ai-btn" title="AI Assistant">
+            <i data-lucide="bot"></i>
+          </button>
+          <button class="header-btn notification-btn" id="notification-btn" title="Notifications">
+            <i data-lucide="bell"></i>
+            <span class="notification-badge" id="notification-badge">0</span>
+          </button>
+          <div class="header-user" id="header-user"></div>
+        </div>
+      </header>
+
+      <!-- Page Content -->
+      <main class="page-content" id="page-content"></main>
+    </div>
+
+    <!-- AI Assistant Panel -->
+    <div class="ai-panel" id="ai-panel">
+      <div class="ai-panel-header">
+        <h3><i data-lucide="bot"></i> AI Assistant</h3>
+        <button class="ai-close-btn" id="ai-close-btn"><i data-lucide="x"></i></button>
+      </div>
+      <div class="ai-messages" id="ai-messages"></div>
+      <div class="ai-input-area">
+        <input type="text" id="ai-input" placeholder="Ask about marketing, posts, campaigns...">
+        <button class="btn btn-primary" id="ai-send-btn"><i data-lucide="send"></i></button>
+      </div>
+    </div>
+    <div class="ai-overlay" id="ai-overlay"></div>
+
+    <!-- Notification Panel -->
+    <div class="notification-panel" id="notification-panel">
+      <div class="notification-panel-header">
+        <h3>Notifications</h3>
+        <button class="btn btn-sm" id="mark-all-read">Mark all read</button>
+      </div>
+      <div class="notification-list" id="notification-list"></div>
+    </div>
+  </div>
+
+  <!-- Modal Container -->
+  <div class="modal-overlay" id="modal-overlay">
+    <div class="modal" id="modal">
+      <div class="modal-header" id="modal-header"></div>
+      <div class="modal-body" id="modal-body"></div>
+      <div class="modal-footer" id="modal-footer"></div>
+    </div>
+  </div>
+
+  <!-- Confirm Dialog -->
+  <div class="modal-overlay" id="confirm-overlay">
+    <div class="modal confirm-modal" id="confirm-modal">
+      <div class="modal-header" id="confirm-header"></div>
+      <div class="modal-body" id="confirm-body"></div>
+      <div class="modal-footer" id="confirm-footer"></div>
+    </div>
+  </div>
+
+  <!-- Toast Container -->
+  <div class="toast-container" id="toast-container"></div>
+
+  <footer style="display:none;">
+    <a href="https://www.perplexity.ai/computer" target="_blank" rel="noopener noreferrer">Created with Perplexity Computer</a>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>
