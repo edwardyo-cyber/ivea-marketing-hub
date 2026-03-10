@@ -483,13 +483,12 @@ async function renderDashboard(container) {
 // ============================================
 // --- Restaurant Locations helpers ---
 async function getRestaurantLocations(restaurantId) {
-  if (restaurantLocationsCache[restaurantId]) return restaurantLocationsCache[restaurantId];
   try {
     const { data } = await sb.from('settings').select('value').eq('key', `locations_${restaurantId}`).single();
     const locations = data?.value ? JSON.parse(data.value) : [];
     restaurantLocationsCache[restaurantId] = locations;
     return locations;
-  } catch { restaurantLocationsCache[restaurantId] = []; return []; }
+  } catch { return []; }
 }
 
 async function saveRestaurantLocations(restaurantId, locations) {
