@@ -16,6 +16,8 @@ let notifications = [];
 let chartInstances = {};
 let selectedRestaurantId = null;
 let restaurantLocationsCache = {};
+let selectedLocationContext = null; // { restaurantId, locationIndex, restaurant, location }
+let locationSubPage = 'loc-dashboard';
 
 // --- Helpers ---
 const $ = (sel, ctx = document) => ctx.querySelector(sel);
@@ -293,7 +295,7 @@ function renderHeader() {
 // --- Routing ---
 function navigate(page) {
   currentPage = page;
-  if (page !== 'restaurants') selectedRestaurantId = null;
+  if (page !== 'restaurants') { selectedRestaurantId = null; selectedLocationContext = null; }
   // Update sidebar active
   $$('.nav-item').forEach(n => n.classList.remove('active'));
   $$('.nav-item').forEach(n => {
@@ -507,6 +509,9 @@ async function saveRestaurantLocations(restaurantId, locations) {
 }
 
 async function renderRestaurants(container) {
+  if (selectedLocationContext) {
+    return renderLocationMarketing(container);
+  }
   if (selectedRestaurantId) {
     return renderRestaurantDetail(container, selectedRestaurantId);
   }
@@ -600,14 +605,18 @@ async function renderRestaurantDetail(container, id) {
         <p style="margin-top:8px;color:var(--text-muted)">No locations added yet</p>
         ${canEdit() ? '<button class="btn btn-primary btn-sm" style="margin-top:12px" id="add-location-empty"><i data-lucide="plus"></i> Add First Location</button>' : ''}
       </div>` : locations.map((loc, i) => `
-        <div class="location-card" onclick="viewLocation('${id}', ${i})">
+        <div class="location-card" onclick="viewLocation('${id}', ${i})" style="cursor:pointer">
           <div class="location-card-header">
             <div class="location-card-name">${loc.name || 'Location ' + (i + 1)}</div>
-            ${badgeHTML(loc.status || 'active')}
+            <div style="display:flex;gap:6px;align-items:center">
+              ${badgeHTML(loc.status || 'active')}
+              <button class="btn-icon btn-ghost" onclick="event.stopPropagation();editLocation('${id}', ${i})" title="Edit location info"><i data-lucide="edit-2" style="width:14px;height:14px"></i></button>
+            </div>
           </div>
           <div class="location-card-detail"><i data-lucide="map-pin" style="width:14px;height:14px"></i> ${loc.address || '—'}${loc.city ? ', ' + loc.city : ''}${loc.state ? ', ' + loc.state : ''}</div>
           ${loc.manager ? `<div class="location-card-detail"><i data-lucide="user" style="width:14px;height:14px"></i> ${loc.manager}</div>` : ''}
           ${loc.phone ? `<div class="location-card-detail"><i data-lucide="phone" style="width:14px;height:14px"></i> ${loc.phone}</div>` : ''}
+          <div style="margin-top:8px;font-size:11px;color:var(--accent);display:flex;align-items:center;gap:4px"><i data-lucide="arrow-right" style="width:12px;height:12px"></i> Open Marketing</div>
         </div>`).join('')}
     </div>
   `;
@@ -673,8 +682,14 @@ window.openBrandDetail = function(id) {
   navigate('restaurants');
 };
 
-window.viewLocation = function(restaurantId, index) {
-  editLocation(restaurantId, index);
+window.viewLocation = async function(restaurantId, index) {
+  const { data: restaurant } = await sb.from('restaurants').select('*').eq('id', restaurantId).single();
+  const locations = await getRestaurantLocations(restaurantId);
+  const location = locations[index];
+  if (!restaurant || !location) return toast('Location not found', 'error');
+  selectedLocationContext = { restaurantId, locationIndex: index, restaurant, location };
+  locationSubPage = 'loc-dashboard';
+  navigate('restaurants');
 };
 
 window.editLocation = async function(restaurantId, index) {
@@ -748,6 +763,430 @@ window.editLocation = async function(restaurantId, index) {
     });
   };
 };
+
+// ============================================
+// LOCATION-LEVEL MARKETING PAGES
+// ============================================
+const LOC_NAV_ITEMS = [
+  { id: 'loc-dashboard', icon: 'layout-dashboard', label: 'Dashboard' },
+  { id: 'loc-content', icon: 'file-text', label: 'Content Hub' },
+  { id: 'loc-calendar', icon: 'calendar', label: 'Calendar' },
+  { id: 'loc-campaigns', icon: 'megaphone', label: 'Campaigns' },
+  { id: 'loc-reviews', icon: 'message-square', label: 'Reviews' },
+  { id: 'loc-reports', icon: 'bar-chart-3', label: 'Reports' },
+  { id: 'loc-social', icon: 'share-2', label: 'Social Accounts' },
+  { id: 'loc-audit', icon: 'scroll-text', label: 'Audit Log' },
+  { id: 'loc-settings', icon: 'settings', label: 'Settings' },
+];
+
+function locKey() {
+  const ctx = selectedLocationContext;
+  return ctx ? `${ctx.restaurantId}_${ctx.locationIndex}` : '';
+}
+
+async function renderLocationMarketing(container) {
+  const ctx = selectedLocationContext;
+  if (!ctx) return renderRestaurants(container);
+  const { restaurant, location, restaurantId, locationIndex } = ctx;
+  const locName = location.name || `Location ${locationIndex + 1}`;
+  const fullName = `${restaurant.name} — ${locName}`;
+
+  container.innerHTML = `
+    <div class="breadcrumb" style="margin-bottom:16px">
+      <span class="breadcrumb-link" onclick="selectedRestaurantId=null;selectedLocationContext=null;navigate('restaurants')">Restaurants</span>
+      <i data-lucide="chevron-right" style="width:14px;height:14px;color:var(--text-muted)"></i>
+      <span class="breadcrumb-link" onclick="selectedLocationContext=null;selectedRestaurantId='${restaurantId}';navigate('restaurants')">${restaurant.name}</span>
+      <i data-lucide="chevron-right" style="width:14px;height:14px;color:var(--text-muted)"></i>
+      <span>${locName}</span>
+    </div>
+    <div class="loc-marketing-layout">
+      <div class="loc-sidebar">
+        <div class="loc-sidebar-header">
+          <div style="font-weight:600;font-size:14px;color:var(--text-primary)">${locName}</div>
+          <div style="font-size:11px;color:var(--text-muted);margin-top:2px">${location.address || ''}${location.city ? ', ' + location.city : ''}</div>
+        </div>
+        <nav class="loc-nav" id="loc-nav">
+          ${LOC_NAV_ITEMS.map(item => `
+            <div class="loc-nav-item ${locationSubPage === item.id ? 'active' : ''}" data-page="${item.id}">
+              <i data-lucide="${item.icon}" style="width:16px;height:16px"></i>
+              <span>${item.label}</span>
+            </div>
+          `).join('')}
+        </nav>
+      </div>
+      <div class="loc-content" id="loc-page-content">
+        <div class="loading-spinner"></div>
+      </div>
+    </div>
+  `;
+  lucide.createIcons({ nameAttr: 'data-lucide' });
+
+  // Nav clicks
+  $$('.loc-nav-item', container).forEach(item => {
+    item.onclick = () => {
+      locationSubPage = item.dataset.page;
+      $$('.loc-nav-item', container).forEach(n => n.classList.remove('active'));
+      item.classList.add('active');
+      renderLocSubPage($('#loc-page-content'));
+    };
+  });
+
+  renderLocSubPage($('#loc-page-content'));
+}
+
+async function renderLocSubPage(container) {
+  if (!container) return;
+  const ctx = selectedLocationContext;
+  const lk = locKey();
+  container.innerHTML = '<div class="loading-spinner"></div>';
+
+  const pages = {
+    'loc-dashboard': renderLocDashboard,
+    'loc-content': renderLocContent,
+    'loc-calendar': renderLocCalendar,
+    'loc-campaigns': renderLocCampaigns,
+    'loc-reviews': renderLocReviews,
+    'loc-reports': renderLocReports,
+    'loc-social': renderLocSocial,
+    'loc-audit': renderLocAudit,
+    'loc-settings': renderLocSettings,
+  };
+  if (pages[locationSubPage]) await pages[locationSubPage](container, ctx);
+}
+
+// --- Location Dashboard ---
+async function renderLocDashboard(container, ctx) {
+  const lk = locKey();
+  const locName = ctx.location.name || 'This Location';
+
+  // Try to load location-specific data
+  const { data: posts } = await sb.from('content_posts').select('*').eq('restaurant_id', ctx.restaurantId);
+  const { data: campaigns } = await sb.from('campaigns').select('*').eq('restaurant_id', ctx.restaurantId);
+  const { data: reviews } = await sb.from('reviews').select('*').eq('restaurant_id', ctx.restaurantId);
+  const locPosts = (posts || []).filter(p => !p.location_key || p.location_key === lk);
+  const locCampaigns = (campaigns || []).filter(c => !c.location_key || c.location_key === lk);
+  const locReviews = (reviews || []).filter(r => !r.location_key || r.location_key === lk);
+
+  const avgRating = locReviews.length > 0 ? (locReviews.reduce((s, r) => s + (r.rating || 0), 0) / locReviews.length).toFixed(1) : '—';
+
+  container.innerHTML = `
+    <h2 style="margin:0 0 4px 0;font-size:20px">${locName} Dashboard</h2>
+    <p style="color:var(--text-muted);font-size:13px;margin:0 0 20px 0">${ctx.location.address || ''}${ctx.location.city ? ', ' + ctx.location.city : ''}${ctx.location.state ? ', ' + ctx.location.state : ''}</p>
+    <div class="kpi-grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:24px">
+      <div class="kpi-card"><div class="kpi-label">Posts</div><div class="kpi-value">${locPosts.length}</div></div>
+      <div class="kpi-card"><div class="kpi-label">Campaigns</div><div class="kpi-value">${locCampaigns.length}</div></div>
+      <div class="kpi-card"><div class="kpi-label">Reviews</div><div class="kpi-value">${locReviews.length}</div></div>
+      <div class="kpi-card"><div class="kpi-label">Avg Rating</div><div class="kpi-value" style="color:var(--warning)">${avgRating}</div></div>
+    </div>
+    <div class="card" style="padding:20px">
+      <h3 style="margin:0 0 12px 0;font-size:15px">Quick Actions</h3>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn btn-primary btn-sm" onclick="locationSubPage='loc-content';navigate('restaurants')"><i data-lucide="plus" style="width:14px;height:14px"></i> Create Post</button>
+        <button class="btn btn-secondary btn-sm" onclick="locationSubPage='loc-campaigns';navigate('restaurants')"><i data-lucide="megaphone" style="width:14px;height:14px"></i> New Campaign</button>
+        <button class="btn btn-secondary btn-sm" onclick="locationSubPage='loc-reviews';navigate('restaurants')"><i data-lucide="message-square" style="width:14px;height:14px"></i> View Reviews</button>
+      </div>
+    </div>
+    ${locReviews.length > 0 ? `
+    <div class="card" style="padding:20px;margin-top:16px">
+      <h3 style="margin:0 0 12px 0;font-size:15px">Recent Reviews</h3>
+      ${locReviews.slice(0, 5).map(r => `
+        <div style="padding:8px 0;border-bottom:1px solid var(--border)">
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <span style="font-weight:500;font-size:13px">${r.reviewer_name || 'Anonymous'}</span>
+            <span style="color:var(--warning);font-size:13px">${'★'.repeat(r.rating || 0)}${'☆'.repeat(5 - (r.rating || 0))}</span>
+          </div>
+          <p style="font-size:12px;color:var(--text-secondary);margin:4px 0 0 0">${(r.content || '').substring(0, 120)}${(r.content || '').length > 120 ? '...' : ''}</p>
+        </div>
+      `).join('')}
+    </div>` : ''}
+  `;
+  lucide.createIcons({ nameAttr: 'data-lucide' });
+}
+
+// --- Location Content Hub ---
+async function renderLocContent(container, ctx) {
+  const lk = locKey();
+  const { data: posts } = await sb.from('content_posts').select('*').eq('restaurant_id', ctx.restaurantId).order('created_at', { ascending: false });
+  const locPosts = (posts || []).filter(p => !p.location_key || p.location_key === lk);
+
+  container.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+      <div><h2 style="margin:0;font-size:20px">Content Hub</h2><p style="color:var(--text-muted);font-size:13px;margin:4px 0 0 0">${ctx.location.name} — ${locPosts.length} post${locPosts.length !== 1 ? 's' : ''}</p></div>
+    </div>
+    ${locPosts.length === 0 ? `<div class="empty-state" style="padding:40px;text-align:center"><i data-lucide="file-text" style="width:40px;height:40px;color:var(--text-muted)"></i><p style="margin-top:8px;color:var(--text-muted)">No posts yet for this location</p><p style="font-size:12px;color:var(--text-muted)">Posts assigned to this brand will appear here. Create posts from the main Content Hub and assign them to ${ctx.restaurant.name}.</p></div>` : `
+    <div class="table-wrapper"><table>
+      <thead><tr><th>Title</th><th>Platform</th><th>Status</th><th>Date</th></tr></thead>
+      <tbody>${locPosts.map(p => `<tr>
+        <td>${p.title || 'Untitled'}</td>
+        <td>${badgeHTML(p.platform || '—')}</td>
+        <td>${badgeHTML(p.status || 'draft')}</td>
+        <td>${formatDate(p.created_at)}</td>
+      </tr>`).join('')}</tbody>
+    </table></div>`}
+  `;
+  lucide.createIcons({ nameAttr: 'data-lucide' });
+}
+
+// --- Location Calendar ---
+async function renderLocCalendar(container, ctx) {
+  const { data: posts } = await sb.from('content_posts').select('*').eq('restaurant_id', ctx.restaurantId).not('scheduled_date', 'is', null);
+  const lk = locKey();
+  const locPosts = (posts || []).filter(p => !p.location_key || p.location_key === lk);
+
+  const now = new Date();
+  const month = now.toLocaleString('en-US', { month: 'long', year: 'numeric' });
+  const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+  const firstDay = new Date(now.getFullYear(), now.getMonth(), 1).getDay();
+
+  // Build calendar grid
+  let calCells = '';
+  for (let i = 0; i < firstDay; i++) calCells += '<div class="cal-cell empty"></div>';
+  for (let d = 1; d <= daysInMonth; d++) {
+    const dateStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+    const dayPosts = locPosts.filter(p => p.scheduled_date && p.scheduled_date.startsWith(dateStr));
+    const isToday = d === now.getDate();
+    calCells += `<div class="cal-cell ${isToday ? 'today' : ''}">
+      <div class="cal-day">${d}</div>
+      ${dayPosts.map(p => `<div class="cal-event" title="${p.title || 'Post'}">${(p.title || 'Post').substring(0, 15)}</div>`).join('')}
+    </div>`;
+  }
+
+  container.innerHTML = `
+    <h2 style="margin:0 0 4px 0;font-size:20px">Calendar</h2>
+    <p style="color:var(--text-muted);font-size:13px;margin:0 0 16px 0">${ctx.location.name} — ${month}</p>
+    <div class="cal-grid">
+      <div class="cal-header">Sun</div><div class="cal-header">Mon</div><div class="cal-header">Tue</div>
+      <div class="cal-header">Wed</div><div class="cal-header">Thu</div><div class="cal-header">Fri</div><div class="cal-header">Sat</div>
+      ${calCells}
+    </div>
+  `;
+}
+
+// --- Location Campaigns ---
+async function renderLocCampaigns(container, ctx) {
+  const lk = locKey();
+  const { data: campaigns } = await sb.from('campaigns').select('*').eq('restaurant_id', ctx.restaurantId).order('created_at', { ascending: false });
+  const locCampaigns = (campaigns || []).filter(c => !c.location_key || c.location_key === lk);
+
+  container.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+      <div><h2 style="margin:0;font-size:20px">Campaigns</h2><p style="color:var(--text-muted);font-size:13px;margin:4px 0 0 0">${ctx.location.name} — ${locCampaigns.length} campaign${locCampaigns.length !== 1 ? 's' : ''}</p></div>
+    </div>
+    ${locCampaigns.length === 0 ? `<div class="empty-state" style="padding:40px;text-align:center"><i data-lucide="megaphone" style="width:40px;height:40px;color:var(--text-muted)"></i><p style="margin-top:8px;color:var(--text-muted)">No campaigns yet for this location</p></div>` : `
+    <div class="table-wrapper"><table>
+      <thead><tr><th>Name</th><th>Type</th><th>Status</th><th>Budget</th><th>Start</th><th>End</th></tr></thead>
+      <tbody>${locCampaigns.map(c => `<tr>
+        <td>${c.name || 'Untitled'}</td>
+        <td>${badgeHTML(c.type || '—')}</td>
+        <td>${badgeHTML(c.status || 'draft')}</td>
+        <td>${c.budget ? '$' + Number(c.budget).toLocaleString() : '—'}</td>
+        <td>${formatDate(c.start_date)}</td>
+        <td>${formatDate(c.end_date)}</td>
+      </tr>`).join('')}</tbody>
+    </table></div>`}
+  `;
+  lucide.createIcons({ nameAttr: 'data-lucide' });
+}
+
+// --- Location Reviews ---
+async function renderLocReviews(container, ctx) {
+  const lk = locKey();
+  const { data: reviews } = await sb.from('reviews').select('*').eq('restaurant_id', ctx.restaurantId).order('created_at', { ascending: false });
+  const locReviews = (reviews || []).filter(r => !r.location_key || r.location_key === lk);
+  const avgRating = locReviews.length > 0 ? (locReviews.reduce((s, r) => s + (r.rating || 0), 0) / locReviews.length).toFixed(1) : '—';
+  const dist = [5,4,3,2,1].map(star => ({ star, count: locReviews.filter(r => r.rating === star).length }));
+
+  container.innerHTML = `
+    <h2 style="margin:0 0 4px 0;font-size:20px">Reviews</h2>
+    <p style="color:var(--text-muted);font-size:13px;margin:0 0 16px 0">${ctx.location.name}</p>
+    <div style="display:flex;gap:24px;margin-bottom:20px">
+      <div class="kpi-card" style="min-width:100px;text-align:center"><div class="kpi-label">Average</div><div class="kpi-value" style="color:var(--warning);font-size:32px">${avgRating}</div></div>
+      <div class="kpi-card" style="min-width:100px;text-align:center"><div class="kpi-label">Total</div><div class="kpi-value">${locReviews.length}</div></div>
+      <div class="card" style="flex:1;padding:12px">
+        ${dist.map(d => `<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+          <span style="font-size:12px;width:16px">${d.star}★</span>
+          <div style="flex:1;height:8px;background:var(--bg-hover);border-radius:4px;overflow:hidden">
+            <div style="height:100%;width:${locReviews.length > 0 ? (d.count / locReviews.length * 100) : 0}%;background:var(--warning);border-radius:4px"></div>
+          </div>
+          <span style="font-size:11px;color:var(--text-muted);width:24px">${d.count}</span>
+        </div>`).join('')}
+      </div>
+    </div>
+    ${locReviews.length === 0 ? `<div class="empty-state" style="padding:40px;text-align:center"><i data-lucide="message-square" style="width:40px;height:40px;color:var(--text-muted)"></i><p style="margin-top:8px;color:var(--text-muted)">No reviews yet for this location</p></div>` : `
+    <div class="table-wrapper"><table>
+      <thead><tr><th>Reviewer</th><th>Rating</th><th>Platform</th><th>Content</th><th>Date</th></tr></thead>
+      <tbody>${locReviews.map(r => `<tr>
+        <td>${r.reviewer_name || 'Anonymous'}</td>
+        <td style="color:var(--warning)">${'★'.repeat(r.rating || 0)}${'☆'.repeat(5 - (r.rating || 0))}</td>
+        <td>${badgeHTML(r.platform || '—')}</td>
+        <td style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${r.content || '—'}</td>
+        <td>${formatDate(r.created_at)}</td>
+      </tr>`).join('')}</tbody>
+    </table></div>`}
+  `;
+  lucide.createIcons({ nameAttr: 'data-lucide' });
+}
+
+// --- Location Reports ---
+async function renderLocReports(container, ctx) {
+  const lk = locKey();
+  const { data: posts } = await sb.from('content_posts').select('*').eq('restaurant_id', ctx.restaurantId);
+  const { data: reviews } = await sb.from('reviews').select('*').eq('restaurant_id', ctx.restaurantId);
+  const locPosts = (posts || []).filter(p => !p.location_key || p.location_key === lk);
+  const locReviews = (reviews || []).filter(r => !r.location_key || r.location_key === lk);
+
+  const published = locPosts.filter(p => p.status === 'published').length;
+  const draft = locPosts.filter(p => p.status === 'draft').length;
+  const scheduled = locPosts.filter(p => p.status === 'scheduled').length;
+
+  container.innerHTML = `
+    <h2 style="margin:0 0 4px 0;font-size:20px">Reports</h2>
+    <p style="color:var(--text-muted);font-size:13px;margin:0 0 16px 0">${ctx.location.name} — Performance Overview</p>
+    <div class="kpi-grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:24px">
+      <div class="kpi-card"><div class="kpi-label">Published</div><div class="kpi-value" style="color:var(--success)">${published}</div></div>
+      <div class="kpi-card"><div class="kpi-label">Drafts</div><div class="kpi-value">${draft}</div></div>
+      <div class="kpi-card"><div class="kpi-label">Scheduled</div><div class="kpi-value" style="color:var(--accent)">${scheduled}</div></div>
+      <div class="kpi-card"><div class="kpi-label">Reviews</div><div class="kpi-value">${locReviews.length}</div></div>
+    </div>
+    <div class="card" style="padding:20px">
+      <h3 style="margin:0 0 12px 0;font-size:15px">Content Breakdown</h3>
+      <div style="display:flex;gap:16px">
+        <div style="flex:1">
+          <div style="font-size:12px;color:var(--text-muted);margin-bottom:8px">Posts by Status</div>
+          ${[{label:'Published',count:published,color:'var(--success)'},{label:'Draft',count:draft,color:'var(--text-muted)'},{label:'Scheduled',count:scheduled,color:'var(--accent)'}].map(s => `
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+              <div style="width:8px;height:8px;border-radius:50%;background:${s.color}"></div>
+              <span style="font-size:13px;flex:1">${s.label}</span>
+              <span style="font-size:13px;font-weight:600">${s.count}</span>
+            </div>
+          `).join('')}
+        </div>
+        <div style="flex:1">
+          <div style="font-size:12px;color:var(--text-muted);margin-bottom:8px">Review Platforms</div>
+          ${locReviews.length === 0 ? '<p style="font-size:13px;color:var(--text-muted)">No reviews yet</p>' : (() => {
+            const platforms = {};
+            locReviews.forEach(r => { const p = r.platform || 'Other'; platforms[p] = (platforms[p] || 0) + 1; });
+            return Object.entries(platforms).map(([p, c]) => `
+              <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+                ${badgeHTML(p)}
+                <span style="font-size:13px;font-weight:600;margin-left:auto">${c}</span>
+              </div>
+            `).join('');
+          })()}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+// --- Location Social Accounts ---
+async function renderLocSocial(container, ctx) {
+  const { data: accounts } = await sb.from('social_accounts').select('*').eq('restaurant_id', ctx.restaurantId);
+  const items = accounts || [];
+
+  container.innerHTML = `
+    <h2 style="margin:0 0 4px 0;font-size:20px">Social Accounts</h2>
+    <p style="color:var(--text-muted);font-size:13px;margin:0 0 16px 0">${ctx.location.name} — Connected accounts</p>
+    ${items.length === 0 ? `<div class="empty-state" style="padding:40px;text-align:center"><i data-lucide="share-2" style="width:40px;height:40px;color:var(--text-muted)"></i><p style="margin-top:8px;color:var(--text-muted)">No social accounts connected for this brand</p><p style="font-size:12px;color:var(--text-muted)">Connect accounts from the main Social Accounts page.</p></div>` : `
+    <div class="table-wrapper"><table>
+      <thead><tr><th>Platform</th><th>Handle</th><th>Followers</th><th>Status</th></tr></thead>
+      <tbody>${items.map(a => `<tr>
+        <td>${badgeHTML(a.platform || '—')}</td>
+        <td>${a.handle || a.username || '—'}</td>
+        <td>${a.followers ? Number(a.followers).toLocaleString() : '—'}</td>
+        <td>${badgeHTML(a.status || 'active')}</td>
+      </tr>`).join('')}</tbody>
+    </table></div>`}
+  `;
+  lucide.createIcons({ nameAttr: 'data-lucide' });
+}
+
+// --- Location Audit Log ---
+async function renderLocAudit(container, ctx) {
+  const { data: logs } = await sb.from('activity_log').select('*').order('created_at', { ascending: false }).limit(50);
+  // Filter for this restaurant
+  const locLogs = (logs || []).filter(l => {
+    const desc = (l.description || '').toLowerCase();
+    const rName = (ctx.restaurant.name || '').toLowerCase();
+    const lName = (ctx.location.name || '').toLowerCase();
+    return desc.includes(rName) || desc.includes(lName);
+  });
+
+  container.innerHTML = `
+    <h2 style="margin:0 0 4px 0;font-size:20px">Audit Log</h2>
+    <p style="color:var(--text-muted);font-size:13px;margin:0 0 16px 0">${ctx.location.name} — Activity history</p>
+    ${locLogs.length === 0 ? `<div class="empty-state" style="padding:40px;text-align:center"><i data-lucide="scroll-text" style="width:40px;height:40px;color:var(--text-muted)"></i><p style="margin-top:8px;color:var(--text-muted)">No activity recorded yet for this location</p></div>` : `
+    <div class="table-wrapper"><table>
+      <thead><tr><th>Action</th><th>Description</th><th>User</th><th>Time</th></tr></thead>
+      <tbody>${locLogs.map(l => `<tr>
+        <td>${badgeHTML(l.action || '—')}</td>
+        <td>${l.description || '—'}</td>
+        <td>${l.user_name || '—'}</td>
+        <td>${formatDateTime(l.created_at)}</td>
+      </tr>`).join('')}</tbody>
+    </table></div>`}
+  `;
+  lucide.createIcons({ nameAttr: 'data-lucide' });
+}
+
+// --- Location Settings ---
+async function renderLocSettings(container, ctx) {
+  const loc = ctx.location;
+  container.innerHTML = `
+    <h2 style="margin:0 0 4px 0;font-size:20px">Location Settings</h2>
+    <p style="color:var(--text-muted);font-size:13px;margin:0 0 16px 0">${ctx.location.name}</p>
+    <div class="card" style="padding:20px">
+      <h3 style="margin:0 0 16px 0;font-size:15px">Location Details</h3>
+      <div class="form-row">
+        <div class="form-group"><label class="form-label">Name</label><input class="form-input" id="ls-name" value="${loc.name || ''}"></div>
+        <div class="form-group"><label class="form-label">Status</label>
+          <select class="form-select" id="ls-status"><option value="active" ${loc.status === 'active' || !loc.status ? 'selected' : ''}>Active</option><option value="inactive" ${loc.status === 'inactive' ? 'selected' : ''}>Inactive</option></select>
+        </div>
+      </div>
+      <div class="form-group"><label class="form-label">Address</label><input class="form-input" id="ls-address" value="${loc.address || ''}"></div>
+      <div class="form-row">
+        <div class="form-group"><label class="form-label">City</label><input class="form-input" id="ls-city" value="${loc.city || ''}"></div>
+        <div class="form-group"><label class="form-label">State</label><input class="form-input" id="ls-state" value="${loc.state || ''}"></div>
+        <div class="form-group"><label class="form-label">ZIP</label><input class="form-input" id="ls-zip" value="${loc.zip || ''}"></div>
+      </div>
+      <div class="form-row">
+        <div class="form-group"><label class="form-label">Phone</label><input class="form-input" id="ls-phone" value="${loc.phone || ''}"></div>
+        <div class="form-group"><label class="form-label">Email</label><input class="form-input" id="ls-email" value="${loc.email || ''}"></div>
+      </div>
+      <div class="form-row">
+        <div class="form-group"><label class="form-label">Manager</label><input class="form-input" id="ls-manager" value="${loc.manager || ''}"></div>
+        <div class="form-group"><label class="form-label">Google Business ID</label><input class="form-input" id="ls-gbp" value="${loc.google_business_id || ''}"></div>
+      </div>
+      <div class="form-group"><label class="form-label">Notes</label><textarea class="form-textarea" id="ls-notes" rows="3">${loc.notes || ''}</textarea></div>
+      <div style="display:flex;gap:8px;margin-top:16px">
+        ${canEdit() ? '<button class="btn btn-primary" id="ls-save">Save Changes</button>' : ''}
+      </div>
+    </div>
+  `;
+
+  $('#ls-save')?.addEventListener('click', async () => {
+    const updated = {
+      name: $('#ls-name').value.trim(),
+      status: $('#ls-status').value,
+      address: $('#ls-address').value.trim(),
+      city: $('#ls-city').value.trim(),
+      state: $('#ls-state').value.trim(),
+      zip: $('#ls-zip').value.trim(),
+      phone: $('#ls-phone').value.trim(),
+      email: $('#ls-email').value.trim(),
+      manager: $('#ls-manager').value.trim(),
+      google_business_id: $('#ls-gbp').value.trim(),
+      notes: $('#ls-notes').value.trim(),
+    };
+    const locations = await getRestaurantLocations(ctx.restaurantId);
+    locations[ctx.locationIndex] = { ...locations[ctx.locationIndex], ...updated };
+    await saveRestaurantLocations(ctx.restaurantId, locations);
+    ctx.location = locations[ctx.locationIndex];
+    selectedLocationContext.location = ctx.location;
+    await logActivity('update_location_settings', `Updated settings: ${updated.name}`);
+    toast('Location settings saved', 'success');
+  });
+}
 
 // ============================================
 // PAGE: Content Hub
@@ -1648,16 +2087,19 @@ async function renderMedia(container) {
     return activeFilter ? items.filter(i => i.relationship === activeFilter) : items;
   }
 
+  let selectedMediaIds = new Set();
+
   function rowHTML(m) {
-    return `<tr>
+    const hasEmail = m.email && m.email.trim();
+    return `<tr data-media-id="${m.id}">
+      <td><input type="checkbox" class="media-cb" data-id="${m.id}" ${!hasEmail ? 'disabled title="No email"' : ''} ${selectedMediaIds.has(String(m.id)) ? 'checked' : ''}></td>
       <td>${m.name}</td>
       <td>${m.outlet || '—'}</td>
       <td>${badgeHTML(m.outlet_type)}</td>
       <td>${m.role || '—'}</td>
       <td>${m.beat || '—'}</td>
-      <td>${m.email || '—'}</td>
+      <td>${hasEmail ? `<a href="mailto:${m.email}" style="color:var(--accent)">${m.email}</a>` : '<span style="color:var(--text-muted)">—</span>'}</td>
       <td>${badgeHTML(m.relationship)}</td>
-      <td>${employeeName(m.contact_owner)}</td>
       <td>${formatDate(m.last_contacted)}</td>
       <td class="table-actions">
         <button class="btn-icon btn-ghost" onclick="editMediaContact('${m.id}')"><i data-lucide="edit-2"></i></button>
@@ -1681,7 +2123,9 @@ async function renderMedia(container) {
       </div>
       <div class="table-toolbar">
         <div class="search-filter"><i data-lucide="search"></i><input type="text" placeholder="Filter contacts..." id="media-filter"></div>
-        <div style="margin-left:auto;display:flex;gap:8px">
+        <div style="margin-left:auto;display:flex;gap:8px;align-items:center">
+          <span id="media-selected-count" style="font-size:12px;color:var(--text-muted);display:none">0 selected</span>
+          <button class="btn btn-accent btn-sm" id="media-email-btn" style="display:none"><i data-lucide="send"></i> Email Selected</button>
           <button class="btn btn-secondary btn-sm" id="media-export"><i data-lucide="download"></i> Export</button>
           ${canEdit() ? '<button class="btn btn-primary btn-sm" id="new-media-btn"><i data-lucide="plus"></i> Add Contact</button>' : ''}
         </div>
@@ -1689,6 +2133,7 @@ async function renderMedia(container) {
       <div class="table-wrapper">
         <table>
           <thead><tr>
+            <th style="width:36px"><input type="checkbox" id="media-select-all" title="Select all with email"></th>
             <th data-key="name">Name</th>
             <th data-key="outlet">Outlet</th>
             <th data-key="outlet_type">Type</th>
@@ -1696,7 +2141,6 @@ async function renderMedia(container) {
             <th data-key="beat">Beat</th>
             <th>Email</th>
             <th data-key="relationship">Relationship</th>
-            <th>Owner</th>
             <th data-key="last_contacted">Last Contact</th>
             <th>Actions</th>
           </tr></thead>
@@ -1710,12 +2154,52 @@ async function renderMedia(container) {
       activeFilter = activeFilter === c.dataset.rel ? '' : c.dataset.rel;
       render();
     });
+    function updateSelectionUI() {
+      const count = selectedMediaIds.size;
+      const countEl = $('#media-selected-count');
+      const emailBtn = $('#media-email-btn');
+      if (countEl) { countEl.style.display = count > 0 ? '' : 'none'; countEl.textContent = `${count} selected`; }
+      if (emailBtn) emailBtn.style.display = count > 0 ? '' : 'none';
+    }
+
+    // Checkboxes
+    $$('.media-cb', container).forEach(cb => cb.addEventListener('change', (e) => {
+      if (e.target.checked) selectedMediaIds.add(e.target.dataset.id);
+      else selectedMediaIds.delete(e.target.dataset.id);
+      updateSelectionUI();
+      // Update select-all state
+      const allCbs = $$('.media-cb:not(:disabled)', container);
+      const allChecked = allCbs.length > 0 && allCbs.every(c => c.checked);
+      const selectAll = $('#media-select-all');
+      if (selectAll) selectAll.checked = allChecked;
+    }));
+
+    // Select all
+    $('#media-select-all')?.addEventListener('change', (e) => {
+      const checked = e.target.checked;
+      $$('.media-cb:not(:disabled)', container).forEach(cb => {
+        cb.checked = checked;
+        if (checked) selectedMediaIds.add(cb.dataset.id);
+        else selectedMediaIds.delete(cb.dataset.id);
+      });
+      updateSelectionUI();
+    });
+
+    // Email selected
+    $('#media-email-btn')?.addEventListener('click', () => {
+      const selected = items.filter(m => selectedMediaIds.has(String(m.id)) && m.email);
+      if (selected.length === 0) return toast('No contacts with email selected', 'error');
+      openMediaEmailCompose(selected);
+    });
+
+    updateSelectionUI();
+
     $('#media-filter')?.addEventListener('input', (e) => {
       const q = e.target.value.toLowerCase();
       $$('#media-tbody tr').forEach(tr => tr.style.display = tr.textContent.toLowerCase().includes(q) ? '' : 'none');
     });
     $('#media-export').onclick = () => csvExport(f, 'media_contacts');
-    $('#new-media-btn').onclick = () => editMediaContact(null);
+    $('#new-media-btn')?.addEventListener('click', () => editMediaContact(null));
   }
   render();
 }
@@ -1818,6 +2302,70 @@ window.deleteMediaContact = function(id) {
     navigate('media');
   });
 };
+
+// --- Media Email Compose ---
+function openMediaEmailCompose(selectedContacts) {
+  const toList = selectedContacts.map(c => `${c.name} &lt;${c.email}&gt;`).join(', ');
+  const toEmails = selectedContacts.map(c => c.email).join(', ');
+
+  openModal('Compose Email to Media', `
+    <div class="form-group">
+      <label class="form-label">To (${selectedContacts.length} contact${selectedContacts.length > 1 ? 's' : ''})</label>
+      <div style="background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:8px 12px;font-size:13px;max-height:80px;overflow-y:auto;line-height:1.6">
+        ${selectedContacts.map(c => `<span class="badge" style="margin:2px 4px 2px 0;font-size:11px">${c.name} &lt;${c.email}&gt;</span>`).join(' ')}
+      </div>
+    </div>
+    <div class="form-group"><label class="form-label">Subject</label><input class="form-input" id="media-email-subject" placeholder="e.g. New Restaurant Opening — Media Invitation"></div>
+    <div class="form-group"><label class="form-label">Message</label><textarea class="form-textarea" id="media-email-body" rows="10" placeholder="Write your message here..."></textarea></div>
+    <div style="display:flex;gap:8px;margin-top:8px">
+      <button class="btn btn-secondary btn-sm" id="media-email-ai" style="font-size:12px"><i data-lucide="sparkles" style="width:14px;height:14px"></i> AI Draft</button>
+    </div>
+  `, `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button><button class="btn btn-primary" id="media-email-send"><i data-lucide="send" style="width:14px;height:14px"></i> Send</button>`);
+
+  lucide.createIcons({ nameAttr: 'data-lucide' });
+
+  // AI Draft helper
+  $('#media-email-ai')?.addEventListener('click', async () => {
+    const subject = $('#media-email-subject').value || 'Media outreach';
+    const btn = $('#media-email-ai');
+    btn.disabled = true; btn.textContent = 'Drafting...';
+    try {
+      const prompt = `Write a professional media outreach email for IVEA Restaurant Group. Subject: ${subject}. This is going to ${selectedContacts.length} media contacts in the DMV area (DC, Maryland, Virginia). Keep it concise, professional, and compelling. Include a clear call-to-action. Only return the email body, no subject line.`;
+      const resp = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${OPENAI_KEY}` },
+        body: JSON.stringify({ model: 'gpt-4o-mini', messages: [{ role: 'user', content: prompt }], max_tokens: 600 })
+      });
+      const data = await resp.json();
+      $('#media-email-body').value = data.choices?.[0]?.message?.content || '';
+    } catch(e) { toast('AI draft failed — write manually', 'error'); }
+    btn.disabled = false; btn.innerHTML = '<i data-lucide="sparkles" style="width:14px;height:14px"></i> AI Draft';
+    lucide.createIcons({ nameAttr: 'data-lucide' });
+  });
+
+  // Send
+  $('#media-email-send')?.addEventListener('click', async () => {
+    const subject = $('#media-email-subject').value.trim();
+    const body = $('#media-email-body').value.trim();
+    if (!subject) return toast('Subject is required', 'error');
+    if (!body) return toast('Message is required', 'error');
+
+    // Log the outreach and update last_contacted
+    const now = new Date().toISOString();
+    for (const c of selectedContacts) {
+      await sb.from('media_contacts').update({ last_contacted: now, relationship: c.relationship === 'cold' ? 'warm' : c.relationship }).eq('id', c.id);
+    }
+    await logActivity('media_email_sent', `Emailed ${selectedContacts.length} media contacts: ${subject}`);
+
+    // Open mailto with all recipients
+    const mailto = `mailto:${toEmails}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+    window.open(mailto, '_blank');
+
+    closeModal();
+    toast(`Email prepared for ${selectedContacts.length} contact${selectedContacts.length > 1 ? 's' : ''} — check your email client`, 'success');
+    navigate('media');
+  });
+}
 
 // ============================================
 // PAGE: Email & SMS
