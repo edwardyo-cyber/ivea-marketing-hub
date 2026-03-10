@@ -521,6 +521,7 @@ async function renderPostsTab(container) {
           <th data-key="status">Status</th>
           <th data-key="scheduled_date">Scheduled</th>
           <th data-key="assigned_to">Assigned To</th>
+          <th>Publish</th>
           <th>Actions</th>
         </tr></thead>
         <tbody id="posts-tbody">${filtered.map(postRow).join('')}</tbody>
@@ -537,6 +538,7 @@ async function renderPostsTab(container) {
       <td>${badgeHTML(p.status)}</td>
       <td>${formatDate(p.scheduled_date)}</td>
       <td>${employeeName(p.assigned_to)}</td>
+      <td>${(p.status === 'approved' || p.status === 'scheduled') ? `<button class="btn btn-sm publish-btn" onclick="publishPost('${p.id}')"><i data-lucide="send"></i> Publish</button>` : '<span style="color:var(--text-muted)">—</span>'}</td>
       <td class="table-actions">
         <button class="btn-icon btn-ghost" onclick="editPost('${p.id}')"><i data-lucide="edit-2"></i></button>
         <button class="btn-icon btn-ghost" onclick="deletePost('${p.id}')"><i data-lucide="trash-2"></i></button>
@@ -623,7 +625,13 @@ window.editPost = async function(id) {
   const selectedPlatforms = parseJSON(post.platforms).map(p => p.toLowerCase());
   openModal(id ? 'Edit Post' : 'New Post', `
     <div class="form-group"><label class="form-label">Title</label><input class="form-input" id="post-title" value="${post.title || ''}"></div>
-    <div class="form-group"><label class="form-label">Body</label><textarea class="form-textarea" id="post-body" rows="4">${post.body || ''}</textarea></div>
+    <div class="form-group"><label class="form-label">Body</label><textarea class="form-textarea" id="post-body" rows="4">${post.body || ''}</textarea>
+      <button class="btn btn-sm ai-gen-btn" id="ai-gen-post" type="button"><i data-lucide="sparkles"></i> Generate with AI</button>
+      <div class="ai-gen-inline" id="ai-gen-post-inline" style="display:none">
+        <input type="text" class="form-input" id="ai-gen-post-prompt" placeholder="What should this post be about? (e.g. 'New spring menu launch at Sushi Bar')">
+        <button class="btn btn-sm btn-primary" id="ai-gen-post-go">Generate</button>
+      </div>
+    </div>
     <div class="form-group"><label class="form-label">Platforms</label>
       <div class="chip-select" id="post-platforms">${allPlatforms.map(p => `<div class="chip ${selectedPlatforms.includes(p.toLowerCase()) ? 'selected' : ''}" data-value="${p}">${p}</div>`).join('')}</div>
     </div>
@@ -647,6 +655,46 @@ window.editPost = async function(id) {
 
   // Chip select
   $$('#post-platforms .chip').forEach(c => c.onclick = () => c.classList.toggle('selected'));
+
+  // AI Generate for posts
+  $('#ai-gen-post').onclick = () => {
+    const inline = $('#ai-gen-post-inline');
+    inline.style.display = inline.style.display === 'none' ? 'flex' : 'none';
+    if (inline.style.display === 'flex') $('#ai-gen-post-prompt').focus();
+  };
+  $('#ai-gen-post-go').onclick = async () => {
+    const prompt = $('#ai-gen-post-prompt').value.trim();
+    if (!prompt) return toast('Please describe what the post should be about', 'error');
+    const btn = $('#ai-gen-post-go');
+    btn.textContent = 'Generating...';
+    btn.disabled = true;
+    const selectedPl = $$('#post-platforms .chip.selected').map(c => c.dataset.value);
+    const result = await generateAIContent(
+      `Create a social media post for a restaurant. Topic: ${prompt}. Target platforms: ${selectedPl.join(', ') || 'Instagram, Facebook'}.
+
+Respond in this exact JSON format:
+{"title": "short catchy title", "body": "the full caption/post text with emojis and hashtags", "tags": ["tag1", "tag2", "tag3"]}
+
+Only output the JSON, nothing else.`, 400
+    );
+    btn.textContent = 'Generate';
+    btn.disabled = false;
+    if (!result) return toast('Failed to generate content', 'error');
+    try {
+      const parsed = JSON.parse(result.replace(/```json?\n?/g, '').replace(/```/g, '').trim());
+      if (parsed.title) $('#post-title').value = parsed.title;
+      if (parsed.body) $('#post-body').value = parsed.body;
+      if (parsed.tags?.length) $('#post-tags').value = parsed.tags.join(', ');
+      toast('Content generated — review and edit as needed', 'success');
+      $('#ai-gen-post-inline').style.display = 'none';
+    } catch {
+      // If not valid JSON, just put it in the body
+      $('#post-body').value = result;
+      toast('Content generated', 'success');
+      $('#ai-gen-post-inline').style.display = 'none';
+    }
+  };
+  $('#ai-gen-post-prompt').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('#ai-gen-post-go').click(); });
 
   $('#save-post-btn').onclick = async () => {
     const obj = {
@@ -1566,7 +1614,13 @@ window.editEmailCampaign = async function(id) {
     </div>
     <div class="form-group"><label class="form-label">Subject</label><input class="form-input" id="ec-subject" value="${e.subject || ''}"></div>
     <div class="form-group"><label class="form-label">Preview Text</label><input class="form-input" id="ec-preview" value="${e.preview_text || ''}"></div>
-    <div class="form-group"><label class="form-label">Body</label><textarea class="form-textarea" id="ec-body" rows="5">${e.body_html || ''}</textarea></div>
+    <div class="form-group"><label class="form-label">Body</label><textarea class="form-textarea" id="ec-body" rows="5">${e.body_html || ''}</textarea>
+      <button class="btn btn-sm ai-gen-btn" id="ai-gen-email" type="button"><i data-lucide="sparkles"></i> Generate with AI</button>
+      <div class="ai-gen-inline" id="ai-gen-email-inline" style="display:none">
+        <input type="text" class="form-input" id="ai-gen-email-prompt" placeholder="Describe this campaign (e.g. 'Valentine's Day dinner promo')">
+        <button class="btn btn-sm btn-primary" id="ai-gen-email-go">Generate</button>
+      </div>
+    </div>
     <div class="form-row">
       <div class="form-group"><label class="form-label">Status</label>
         <select class="form-select" id="ec-status">
@@ -1588,6 +1642,45 @@ window.editEmailCampaign = async function(id) {
     <div class="form-group"><label class="form-label">Tags (comma-separated)</label><input class="form-input" id="ec-tags" value="${parseJSON(e.tags).join(', ')}"></div>
     <div class="form-group"><label class="form-label">Notes</label><textarea class="form-textarea" id="ec-notes">${e.notes || ''}</textarea></div>
   `, `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button><button class="btn btn-primary" id="save-ec-btn">Save</button>`);
+
+  // AI Generate for email/SMS campaigns
+  $('#ai-gen-email').onclick = () => {
+    const inline = $('#ai-gen-email-inline');
+    inline.style.display = inline.style.display === 'none' ? 'flex' : 'none';
+    if (inline.style.display === 'flex') $('#ai-gen-email-prompt').focus();
+  };
+  $('#ai-gen-email-go').onclick = async () => {
+    const prompt = $('#ai-gen-email-prompt').value.trim();
+    if (!prompt) return toast('Please describe the campaign', 'error');
+    const btn = $('#ai-gen-email-go');
+    btn.textContent = 'Generating...';
+    btn.disabled = true;
+    const channel = $('#ec-channel').value;
+    const result = await generateAIContent(
+      `Create ${channel === 'sms' ? 'an SMS' : 'an email'} marketing campaign for a restaurant. Topic: ${prompt}.
+
+Respond in this exact JSON format:
+{"subject": "email subject line", "preview": "preview text (1 sentence)", "body": "the full ${channel === 'sms' ? 'SMS message (under 160 chars)' : 'email body copy'}"}
+
+Only output the JSON, nothing else.`, 400
+    );
+    btn.textContent = 'Generate';
+    btn.disabled = false;
+    if (!result) return toast('Failed to generate content', 'error');
+    try {
+      const parsed = JSON.parse(result.replace(/```json?\n?/g, '').replace(/```/g, '').trim());
+      if (parsed.subject) $('#ec-subject').value = parsed.subject;
+      if (parsed.preview) $('#ec-preview').value = parsed.preview;
+      if (parsed.body) $('#ec-body').value = parsed.body;
+      toast('Content generated — review and edit as needed', 'success');
+      $('#ai-gen-email-inline').style.display = 'none';
+    } catch {
+      $('#ec-body').value = result;
+      toast('Content generated', 'success');
+      $('#ai-gen-email-inline').style.display = 'none';
+    }
+  };
+  $('#ai-gen-email-prompt').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('#ai-gen-email-go').click(); });
 
   $('#save-ec-btn').onclick = async () => {
     const list = $('#ec-list').value;
@@ -1674,6 +1767,7 @@ async function renderReviews(container) {
           <option value="no" ${respondedFilter === 'no' ? 'selected' : ''}>Not Responded</option>
         </select>
         <div style="margin-left:auto;display:flex;gap:8px">
+          <button class="btn btn-secondary btn-sm sync-btn" id="rev-sync-google" onclick="syncGoogleReviews()"><i data-lucide="refresh-cw"></i> Sync Google Reviews</button>
           <button class="btn btn-secondary btn-sm" id="rev-export"><i data-lucide="download"></i> Export</button>
           <button class="btn btn-secondary btn-sm" id="rev-bulk-respond" style="display:none"><i data-lucide="check-circle"></i> Bulk Respond</button>
         </div>
@@ -1733,11 +1827,51 @@ async function renderReviews(container) {
   render();
 }
 
-window.respondToReview = function(id) {
+window.respondToReview = async function(id) {
+  // Fetch the review data for AI context
+  const { data: reviewData } = await sb.from('reviews').select('*').eq('id', id).single();
+  const review = reviewData || {};
+
   openModal('Respond to Review', `
+    ${review.review_text ? `<div class="review-preview-card">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+        <span style="font-weight:600">${review.reviewer_name || 'Customer'}</span>
+        <span>${starsHTML(review.rating || 3)}</span>
+        <span class="badge badge-platform">${review.platform || ''}</span>
+      </div>
+      <p style="color:var(--text-secondary);font-size:13px">${review.review_text || review.content || ''}</p>
+    </div>` : ''}
     <div class="form-group"><label class="form-label">Your Response</label>
-    <textarea class="form-textarea" id="review-response" rows="4" placeholder="Write your response..."></textarea></div>
+    <textarea class="form-textarea" id="review-response" rows="4" placeholder="Write your response..."></textarea>
+    <button class="btn btn-sm ai-gen-btn" id="ai-gen-review" type="button"><i data-lucide="sparkles"></i> AI Suggest Response</button>
+    </div>
   `, `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button><button class="btn btn-primary" id="save-response-btn">Submit Response</button>`);
+  lucide.createIcons({ nameAttr: 'data-lucide' });
+
+  // AI Suggest handler
+  $('#ai-gen-review').onclick = async () => {
+    const btn = $('#ai-gen-review');
+    btn.innerHTML = '<i data-lucide="loader"></i> Generating...';
+    btn.disabled = true;
+    const rating = review.rating || 3;
+    const restaurantName = review.restaurant_name || 'our restaurant';
+    const reviewText = review.review_text || review.content || 'the customer experience';
+    const result = await generateAIContent(
+      `You are a restaurant manager responding to a ${rating}-star review for ${restaurantName}.
+The review says: "${reviewText}"
+Write a professional, warm response. ${rating >= 4 ? 'Thank the customer genuinely and encourage them to return. Mention something specific from their review.' : 'Apologize sincerely, acknowledge the specific issue they raised, and offer to make it right. Invite them to contact us directly.'}
+Keep it under 100 words. Sound human, not corporate.`, 200
+    );
+    btn.innerHTML = '<i data-lucide="sparkles"></i> AI Suggest Response';
+    btn.disabled = false;
+    lucide.createIcons({ nameAttr: 'data-lucide' });
+    if (result) {
+      $('#review-response').value = result;
+      toast('Response generated — review and edit before submitting', 'success');
+    } else {
+      toast('Failed to generate response', 'error');
+    }
+  };
 
   $('#save-response-btn').onclick = async () => {
     const response = $('#review-response').value;
@@ -2273,7 +2407,7 @@ async function renderSettings(container) {
     return;
   }
   const { data: settings } = await sb.from('settings').select('*');
-  const allSettings = settings || [];
+  let allSettings = settings || [];
 
   // Group settings by key prefix
   const groupMap = {
@@ -2282,6 +2416,8 @@ async function renderSettings(container) {
     social: { label: 'Social Media', icon: 'share-2', keys: ['instagram_handle', 'tiktok_handle', 'facebook_handle', 'twitter_handle', 'linkedin_handle'] },
     email: { label: 'Email', icon: 'mail', keys: ['email_sender_name', 'email_reply_to', 'smtp_host', 'smtp_port', 'smtp_user', 'smtp_pass'] },
     sms: { label: 'SMS', icon: 'smartphone', keys: ['twilio_sid', 'twilio_token', 'twilio_phone'] },
+    google: { label: 'Google Business', icon: 'map-pin', keys: ['google_business_account_id', 'google_business_access_token'] },
+    ayrshare: { label: 'Social Publishing', icon: 'share', keys: ['ayrshare_api_key'] },
     api: { label: 'API Keys', icon: 'key', keys: ['openai_key'] },
     notifications: { label: 'Notifications', icon: 'bell', keys: ['notification_new_review', 'notification_content_approval', 'notification_campaign_deadline'] },
     security: { label: 'Security', icon: 'shield', keys: ['manager_password'] },
@@ -2289,6 +2425,17 @@ async function renderSettings(container) {
   };
   const groups = Object.keys(groupMap);
   let activeGroup = 'general';
+
+  // Auto-create missing settings keys for new integrations
+  const allKeys = Object.values(groupMap).flatMap(g => g.keys);
+  const existingKeys = new Set(allSettings.map(s => s.key));
+  const missingKeys = allKeys.filter(k => !existingKeys.has(k));
+  if (missingKeys.length) {
+    const inserts = missingKeys.map(key => ({ key, value: '', updated_at: new Date().toISOString() }));
+    await sb.from('settings').insert(inserts);
+    const { data: refreshed } = await sb.from('settings').select('*');
+    allSettings = refreshed || allSettings;
+  }
 
   function render() {
     const gm = groupMap[activeGroup];
@@ -2478,13 +2625,123 @@ function renderNotifications() {
 }
 
 // ============================================
+// GLOBAL: AI Content Generation Helper
+// ============================================
+async function generateAIContent(prompt, maxTokens = 500) {
+  if (!OPENAI_KEY) { toast('OpenAI key not configured. Go to Settings → API Keys.', 'error'); return null; }
+  try {
+    const res = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${OPENAI_KEY}` },
+      body: JSON.stringify({
+        model: 'gpt-4o-mini',
+        messages: [
+          { role: 'system', content: 'You are a marketing expert for IVEA, a restaurant group managing 35 brands and 90+ locations in the DMV (DC, Maryland, Virginia) area. Generate professional, engaging marketing content. Be concise and creative.' },
+          { role: 'user', content: prompt }
+        ],
+        max_tokens: maxTokens,
+      }),
+    });
+    const data = await res.json();
+    return data.choices?.[0]?.message?.content || null;
+  } catch(err) {
+    console.error('AI generation error:', err);
+    return null;
+  }
+}
+
+// Publish post to social media via Ayrshare
+window.publishPost = async function(id) {
+  const { data: post } = await sb.from('content_posts').select('*').eq('id', id).single();
+  if (!post) return toast('Post not found', 'error');
+
+  const platforms = parseJSON(post.platforms).map(p => p.toLowerCase());
+  if (!platforms.length) return toast('No platforms selected for this post', 'error');
+
+  // Map our platform names to Ayrshare platform names
+  const platformMap = { instagram: 'instagram', facebook: 'facebook', twitter: 'twitter', tiktok: 'tiktok', linkedin: 'linkedin', youtube: 'youtube', pinterest: 'pinterest' };
+  const ayrPlatforms = platforms.map(p => platformMap[p]).filter(Boolean);
+
+  if (!ayrPlatforms.length) return toast('No supported platforms for publishing', 'error');
+
+  const caption = `${post.title || ''}\n\n${post.body || ''}`.trim();
+  if (!caption) return toast('Post has no content to publish', 'error');
+
+  openConfirm('Publish to Social Media',
+    `Publish "${post.title}" to ${ayrPlatforms.join(', ')}?`,
+    async () => {
+      toast('Publishing...', 'info');
+      try {
+        const isScheduled = post.scheduled_date && post.scheduled_time && new Date(`${post.scheduled_date}T${post.scheduled_time}`) > new Date();
+        const endpoint = isScheduled ? 'schedule' : 'post';
+        const body = { post: caption, platforms: ayrPlatforms };
+        if (isScheduled) body.scheduleDate = new Date(`${post.scheduled_date}T${post.scheduled_time}`).toISOString();
+
+        const res = await fetch(`/api/social?action=${endpoint}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const data = await res.json();
+
+        if (data.needsSetup) return toast('Ayrshare not configured. Add API key in Settings → Social Publishing.', 'error');
+        if (data.status === 'error') return toast(`Error: ${data.message || 'Failed to publish'}`, 'error');
+
+        // Update post status in Supabase
+        await sb.from('content_posts').update({ status: isScheduled ? 'scheduled' : 'published', updated_at: new Date().toISOString() }).eq('id', id);
+        await logActivity('publish_post', `${isScheduled ? 'Scheduled' : 'Published'} "${post.title}" to ${ayrPlatforms.join(', ')}`);
+        toast(`${isScheduled ? 'Scheduled' : 'Published'} successfully to ${ayrPlatforms.join(', ')}`, 'success');
+        navigate('content');
+      } catch(err) {
+        toast('Failed to publish: ' + err.message, 'error');
+      }
+    }
+  );
+};
+
+// Sync Google Reviews to Supabase
+window.syncGoogleReviews = async function() {
+  toast('Syncing Google Reviews...', 'info');
+  try {
+    const res = await fetch('/api/google-reviews?action=fetch-all');
+    const data = await res.json();
+
+    if (data.needsSetup) {
+      toast('Google Business not configured. Add credentials in Settings → Google Business.', 'error');
+      return;
+    }
+
+    if (!data.reviews?.length) {
+      toast('No reviews found from Google', 'info');
+      return;
+    }
+
+    // Upsert reviews into Supabase
+    let newCount = 0;
+    for (const review of data.reviews) {
+      // Check if review already exists
+      const { data: existing } = await sb.from('reviews').select('id').eq('reviewer_name', review.reviewer_name).eq('review_text', review.review_text).eq('platform', 'google').limit(1);
+      if (!existing?.length) {
+        await sb.from('reviews').insert(review);
+        newCount++;
+      }
+    }
+    await logActivity('sync_reviews', `Synced ${newCount} new Google review(s)`);
+    toast(`Synced ${newCount} new review(s) from Google`, 'success');
+    navigate('reviews');
+  } catch(err) {
+    toast('Failed to sync: ' + err.message, 'error');
+  }
+};
+
+// ============================================
 // GLOBAL: AI Assistant — Page-Aware Suggestions
 // ============================================
 let aiLastSuggestPage = null;
 
 const PAGE_CONTEXTS = {
   'dashboard': { label: 'Dashboard', prompt: 'The user is on the main Dashboard which shows KPIs (team members, brands, locations, posts this month, active campaigns, avg engagement), quick actions, action insights, and recent activity. Provide 3-4 actionable suggestions to improve their marketing performance based on typical restaurant group KPIs.' },
-  'content': { label: 'Content Hub', prompt: 'The user is on the Content Hub page managing social media posts across platforms (Instagram, Facebook, TikTok, Twitter, LinkedIn). Suggest content ideas, posting strategies, trending formats, and engagement tips for a multi-brand restaurant group.' },
+  'content': { label: 'Content Hub', prompt: 'The user is on the Content Hub page managing social media posts across platforms (Instagram, Facebook, TikTok, Twitter, LinkedIn). Posts can be published directly to social media via Ayrshare integration. AI content generation is available. Suggest content ideas, posting strategies, trending formats, and engagement tips for a multi-brand restaurant group.' },
   'content-calendar': { label: 'Unified Calendar', prompt: 'The user is on the Content Calendar page which shows a monthly view of scheduled posts and campaigns. Suggest optimal posting schedules, content themes for this month, and ways to maintain consistent posting across 35+ restaurant brands.' },
   'influencers': { label: 'Influencers', prompt: 'The user is on the Influencer Management page tracking food influencer outreach, deals, and ROI. Suggest influencer collaboration strategies, outreach templates, negotiation tips, and ways to measure influencer campaign ROI for restaurants.' },
   'campaigns': { label: 'Campaigns', prompt: 'The user is on the Campaigns page managing marketing campaigns with budgets and performance tracking. Suggest campaign ideas, budget optimization tips, A/B testing strategies, and seasonal campaign themes for a restaurant group.' },
@@ -2492,7 +2749,7 @@ const PAGE_CONTEXTS = {
   'email-sms': { label: 'Email & SMS', prompt: 'The user is on the Email & SMS Campaigns page. Suggest email marketing best practices, SMS campaign ideas, subject line tips, segmentation strategies, and optimal send times for restaurant marketing.' },
   'inbox': { label: 'Inbox', prompt: 'The user is on the Gmail Inbox page. Suggest email management tips, response templates for common restaurant business inquiries, and ways to prioritize important communications.' },
   'text-messages': { label: 'Text Messages', prompt: 'The user is on the SMS Text Messages page using Twilio. Suggest SMS marketing best practices, customer engagement via text, reservation/order confirmation templates, and promotional text ideas.' },
-  'reviews': { label: 'Reviews', prompt: 'The user is on the Reviews page managing customer reviews. Suggest response strategies for positive and negative reviews, ways to encourage more reviews, and reputation management best practices for restaurants.' },
+  'reviews': { label: 'Reviews', prompt: 'The user is on the Reviews page managing customer reviews. Google Business Profile sync is available to pull in reviews from all 90+ locations. AI-powered response generation helps craft replies. Suggest response strategies for positive and negative reviews, ways to encourage more reviews, and reputation management best practices for restaurants.' },
   'reports': { label: 'Reports', prompt: 'The user is on the Analytics Reports page. Suggest key metrics to track, report formats, competitive benchmarking ideas, and data-driven insights for restaurant marketing optimization.' },
   'social-accounts': { label: 'Social Accounts', prompt: 'The user is on the Social Accounts page managing connected social media profiles. Suggest platform-specific strategies, growth tactics, and content format recommendations for each social channel.' },
   'team': { label: 'Team', prompt: 'The user is on the Team Management page. Suggest team workflow improvements, role assignments for marketing tasks, collaboration tools, and productivity tips for a marketing team.' },

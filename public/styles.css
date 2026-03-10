@@ -834,6 +834,86 @@ input[type="checkbox"] {
   30% { transform: translateY(-6px); opacity: 1; }
 }
 
+/* ---------- AI Generate Buttons ---------- */
+.ai-gen-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  background: rgba(79, 152, 163, 0.1);
+  border: 1px solid rgba(79, 152, 163, 0.3);
+  color: var(--accent);
+  font-size: 12px;
+  padding: 5px 12px;
+  border-radius: 100px;
+  transition: var(--transition);
+}
+.ai-gen-btn:hover {
+  background: rgba(79, 152, 163, 0.2);
+  border-color: var(--accent);
+  box-shadow: 0 0 12px rgba(79, 152, 163, 0.15);
+}
+.ai-gen-btn:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+.ai-gen-btn i { width: 14px; height: 14px; }
+
+.ai-gen-inline {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+  align-items: center;
+}
+.ai-gen-inline input {
+  flex: 1;
+  background: var(--bg-input);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  padding: 7px 12px;
+  font-size: 13px;
+  outline: none;
+}
+.ai-gen-inline input:focus { box-shadow: 0 0 0 2px rgba(79, 152, 163, 0.2); }
+
+/* ---------- Publish Button ---------- */
+.publish-btn {
+  background: rgba(79, 152, 163, 0.12);
+  color: var(--accent);
+  border: 1px solid rgba(79, 152, 163, 0.3);
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  transition: var(--transition);
+  white-space: nowrap;
+}
+.publish-btn:hover {
+  background: var(--accent);
+  color: #fff;
+}
+.publish-btn i { width: 12px; height: 12px; }
+
+/* ---------- Sync Button ---------- */
+.sync-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.sync-btn i { width: 14px; height: 14px; }
+
+/* ---------- Review Preview Card ---------- */
+.review-preview-card {
+  background: var(--bg-stripe);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 12px 16px;
+  margin-bottom: 16px;
+}
+
 /* ---------- Notification Panel ---------- */
 .notification-panel {
   position: fixed;
