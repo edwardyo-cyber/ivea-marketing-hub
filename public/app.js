@@ -1726,7 +1726,7 @@ window.editMediaContact = async function(id) {
     const { data } = await sb.from('media_contacts').select('*').eq('id', id).single();
     m = data || {};
   }
-  const types = ['tv', 'newspaper', 'online', 'magazine', 'blog', 'podcast', 'radio'];
+  const types = ['tv', 'newspaper', 'online', 'magazine', 'blog', 'podcast', 'radio', 'influencer'];
   const rels = ['hot', 'warm', 'cold'];
 
   openModal(id ? 'Edit Media Contact' : 'Add Media Contact', `
