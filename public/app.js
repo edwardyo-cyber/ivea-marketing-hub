@@ -2478,27 +2478,156 @@ function renderNotifications() {
 }
 
 // ============================================
-// GLOBAL: AI Assistant
+// GLOBAL: AI Assistant — Page-Aware Suggestions
 // ============================================
+let aiLastSuggestPage = null;
+
+const PAGE_CONTEXTS = {
+  'dashboard': { label: 'Dashboard', prompt: 'The user is on the main Dashboard which shows KPIs (team members, brands, locations, posts this month, active campaigns, avg engagement), quick actions, action insights, and recent activity. Provide 3-4 actionable suggestions to improve their marketing performance based on typical restaurant group KPIs.' },
+  'content': { label: 'Content Hub', prompt: 'The user is on the Content Hub page managing social media posts across platforms (Instagram, Facebook, TikTok, Twitter, LinkedIn). Suggest content ideas, posting strategies, trending formats, and engagement tips for a multi-brand restaurant group.' },
+  'content-calendar': { label: 'Unified Calendar', prompt: 'The user is on the Content Calendar page which shows a monthly view of scheduled posts and campaigns. Suggest optimal posting schedules, content themes for this month, and ways to maintain consistent posting across 35+ restaurant brands.' },
+  'influencers': { label: 'Influencers', prompt: 'The user is on the Influencer Management page tracking food influencer outreach, deals, and ROI. Suggest influencer collaboration strategies, outreach templates, negotiation tips, and ways to measure influencer campaign ROI for restaurants.' },
+  'campaigns': { label: 'Campaigns', prompt: 'The user is on the Campaigns page managing marketing campaigns with budgets and performance tracking. Suggest campaign ideas, budget optimization tips, A/B testing strategies, and seasonal campaign themes for a restaurant group.' },
+  'local-media': { label: 'Local Media', prompt: 'The user is on the Local Media page managing media contacts and PR outreach. Suggest PR strategies, press release ideas, media pitch angles, and local event partnerships for a DMV-area restaurant group.' },
+  'email-sms': { label: 'Email & SMS', prompt: 'The user is on the Email & SMS Campaigns page. Suggest email marketing best practices, SMS campaign ideas, subject line tips, segmentation strategies, and optimal send times for restaurant marketing.' },
+  'inbox': { label: 'Inbox', prompt: 'The user is on the Gmail Inbox page. Suggest email management tips, response templates for common restaurant business inquiries, and ways to prioritize important communications.' },
+  'text-messages': { label: 'Text Messages', prompt: 'The user is on the SMS Text Messages page using Twilio. Suggest SMS marketing best practices, customer engagement via text, reservation/order confirmation templates, and promotional text ideas.' },
+  'reviews': { label: 'Reviews', prompt: 'The user is on the Reviews page managing customer reviews. Suggest response strategies for positive and negative reviews, ways to encourage more reviews, and reputation management best practices for restaurants.' },
+  'reports': { label: 'Reports', prompt: 'The user is on the Analytics Reports page. Suggest key metrics to track, report formats, competitive benchmarking ideas, and data-driven insights for restaurant marketing optimization.' },
+  'social-accounts': { label: 'Social Accounts', prompt: 'The user is on the Social Accounts page managing connected social media profiles. Suggest platform-specific strategies, growth tactics, and content format recommendations for each social channel.' },
+  'team': { label: 'Team', prompt: 'The user is on the Team Management page. Suggest team workflow improvements, role assignments for marketing tasks, collaboration tools, and productivity tips for a marketing team.' },
+  'audit-log': { label: 'Audit Log', prompt: 'The user is on the Audit Log page viewing system activity. Suggest compliance best practices, activity monitoring tips, and team accountability strategies.' },
+  'settings': { label: 'Settings', prompt: 'The user is on the Settings page. Suggest ways to optimize their marketing hub configuration, integration tips, and workflow automation ideas.' },
+};
+
 function initAI() {
   const panel = $('#ai-panel');
   const overlay = $('#ai-overlay');
-  $('#ai-btn').onclick = () => { panel.classList.add('open'); overlay.classList.add('open'); $('#ai-input').focus(); };
+  $('#ai-btn').onclick = () => {
+    panel.classList.add('open');
+    overlay.classList.add('open');
+    generatePageSuggestions();
+  };
   $('#ai-close-btn').onclick = () => { panel.classList.remove('open'); overlay.classList.remove('open'); };
   overlay.onclick = () => { panel.classList.remove('open'); overlay.classList.remove('open'); };
   $('#ai-send-btn').onclick = sendAIMessage;
   $('#ai-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') sendAIMessage(); });
+}
 
-  if (!aiMessages.length) {
-    aiMessages.push({ role: 'assistant', content: "Hi! I'm your IVEA marketing assistant. Ask me about campaigns, content strategy, reviews, or anything marketing-related." });
+async function generatePageSuggestions() {
+  // Reset conversation for fresh page-specific suggestions
+  aiMessages = [];
+  const pageCtx = PAGE_CONTEXTS[currentPage] || { label: currentPage, prompt: `The user is on the "${currentPage}" page. Provide helpful marketing suggestions relevant to this section.` };
+  aiLastSuggestPage = currentPage;
+
+  // Show loading state
+  const container = $('#ai-messages');
+  container.innerHTML = `
+    <div class="ai-suggest-header">
+      <i data-lucide="sparkles" style="width:18px;height:18px;color:var(--accent)"></i>
+      <span>Suggestions for <strong>${pageCtx.label}</strong></span>
+    </div>
+    <div class="ai-msg assistant"><div class="ai-typing"><span></span><span></span><span></span></div></div>
+  `;
+  if (window.lucide) lucide.createIcons();
+
+  if (!OPENAI_KEY) {
+    aiMessages = [{ role: 'assistant', content: '⚠️ OpenAI API key not configured. Go to **Settings → Integrations** and add your OpenAI key to enable AI suggestions.' }];
     renderAIMessages();
+    return;
   }
+
+  // Gather page data for context
+  let pageData = '';
+  try {
+    pageData = await gatherPageData();
+  } catch(e) { /* no extra data */ }
+
+  const systemPrompt = `You are an AI marketing assistant for IVEA Marketing Hub, a restaurant group managing 35 brands and 90+ locations in the DMV (DC, Maryland, Virginia) area. Current user: ${currentUser.name} (${currentUser.role}).
+
+${pageCtx.prompt}
+
+${pageData ? 'Here is current data from this page:\n' + pageData + '\n\n' : ''}Respond with 3-5 specific, actionable suggestions. Format each as a short bold title followed by 1-2 sentences. Use markdown formatting. Be concise — no fluff. Tailor every suggestion to the restaurant/food industry.`;
+
+  try {
+    const res = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${OPENAI_KEY}` },
+      body: JSON.stringify({
+        model: 'gpt-4o-mini',
+        messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: `Give me smart suggestions for the ${pageCtx.label} page right now.` }],
+        max_tokens: 600,
+      }),
+    });
+    const data = await res.json();
+    const reply = data.choices?.[0]?.message?.content || 'Could not generate suggestions. Please try again.';
+    aiMessages = [
+      { role: 'assistant', content: reply }
+    ];
+  } catch (err) {
+    aiMessages = [{ role: 'assistant', content: 'Could not connect to AI service. Check your OpenAI API key in Settings.' }];
+  }
+  renderAIMessages();
+}
+
+async function gatherPageData() {
+  let info = '';
+  try {
+    if (currentPage === 'dashboard') {
+      const [posts, campaigns, reviews] = await Promise.all([
+        sb.from('content_posts').select('status', { count: 'exact' }),
+        sb.from('campaigns').select('name,status,budget,spend'),
+        sb.from('reviews').select('rating,status'),
+      ]);
+      const activeCamps = (campaigns.data || []).filter(c => c.status === 'active');
+      const pendingReviews = (reviews.data || []).filter(r => r.status === 'pending');
+      const avgRating = (reviews.data || []).length ? ((reviews.data || []).reduce((s,r) => s + r.rating, 0) / reviews.data.length).toFixed(1) : 'N/A';
+      info = `Active campaigns: ${activeCamps.length} (${activeCamps.map(c => c.name).join(', ')}). Total posts: ${posts.count || 0}. Pending reviews: ${pendingReviews.length}. Avg review rating: ${avgRating}.`;
+    } else if (currentPage === 'content') {
+      const { data } = await sb.from('content_posts').select('status,platform');
+      const byStatus = {}; const byPlatform = {};
+      (data || []).forEach(p => { byStatus[p.status] = (byStatus[p.status]||0)+1; byPlatform[p.platform] = (byPlatform[p.platform]||0)+1; });
+      info = `Posts by status: ${JSON.stringify(byStatus)}. Posts by platform: ${JSON.stringify(byPlatform)}.`;
+    } else if (currentPage === 'campaigns') {
+      const { data } = await sb.from('campaigns').select('*');
+      info = (data || []).map(c => `${c.name}: ${c.status}, budget $${c.budget}, spent $${c.spend}`).join('. ');
+    } else if (currentPage === 'reviews') {
+      const { data } = await sb.from('reviews').select('*').order('created_at', { ascending: false }).limit(5);
+      info = (data || []).map(r => `${r.restaurant_name || 'Restaurant'}: ${r.rating}★ - "${(r.text || '').substring(0, 80)}" (${r.status})`).join('. ');
+    } else if (currentPage === 'influencers') {
+      const { data } = await sb.from('influencers').select('name,platform,followers,status');
+      info = (data || []).map(i => `${i.name} (${i.platform}, ${i.followers} followers, ${i.status})`).join('. ');
+    } else if (currentPage === 'email-sms') {
+      const { data } = await sb.from('email_campaigns').select('name,status,channel,open_rate,click_rate');
+      info = (data || []).map(e => `${e.name}: ${e.channel}, ${e.status}, open ${e.open_rate}%, click ${e.click_rate}%`).join('. ');
+    }
+  } catch(e) { /* silent */ }
+  return info;
 }
 
 function renderAIMessages() {
   const container = $('#ai-messages');
-  container.innerHTML = aiMessages.map(m => `<div class="ai-msg ${m.role}">${m.content}</div>`).join('');
+  const pageCtx = PAGE_CONTEXTS[currentPage] || { label: currentPage };
+  container.innerHTML = `
+    <div class="ai-suggest-header">
+      <i data-lucide="sparkles" style="width:18px;height:18px;color:var(--accent)"></i>
+      <span>Suggestions for <strong>${pageCtx.label}</strong></span>
+    </div>
+    ${aiMessages.map(m => `<div class="ai-msg ${m.role}">${formatAIMarkdown(m.content)}</div>`).join('')}
+  `;
   container.scrollTop = container.scrollHeight;
+  if (window.lucide) lucide.createIcons();
+}
+
+function formatAIMarkdown(text) {
+  return text
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\*(.+?)\*/g, '<em>$1</em>')
+    .replace(/^### (.+)$/gm, '<h4 style="margin:8px 0 4px;color:var(--accent)">$1</h4>')
+    .replace(/^## (.+)$/gm, '<h3 style="margin:10px 0 4px;color:var(--accent)">$1</h3>')
+    .replace(/^- (.+)$/gm, '<div style="padding-left:12px">• $1</div>')
+    .replace(/^\d+\.\s(.+)$/gm, '<div style="padding-left:12px">$&</div>')
+    .replace(/\n/g, '<br>');
 }
 
 async function sendAIMessage() {
@@ -2509,7 +2638,8 @@ async function sendAIMessage() {
   aiMessages.push({ role: 'user', content: msg });
   renderAIMessages();
 
-  const systemPrompt = `You are an AI marketing assistant for IVEA Marketing Hub, a restaurant group with 35 brands and 90+ locations in the DMV area. Current user: ${currentUser.name} (${currentUser.role}). Current page: ${currentPage}. Help with marketing strategy, content ideas, campaign planning, review responses, and data insights. Be concise and actionable.`;
+  const pageCtx = PAGE_CONTEXTS[currentPage] || { label: currentPage, prompt: '' };
+  const systemPrompt = `You are an AI marketing assistant for IVEA Marketing Hub, a restaurant group with 35 brands and 90+ locations in the DMV area. Current user: ${currentUser.name} (${currentUser.role}). Current page: ${pageCtx.label}. ${pageCtx.prompt} Be concise and actionable. Use markdown formatting.`;
 
   try {
     const res = await fetch('https://api.openai.com/v1/chat/completions', {
@@ -2519,7 +2649,7 @@ async function sendAIMessage() {
         model: 'gpt-4o-mini',
         messages: [
           { role: 'system', content: systemPrompt },
-          ...aiMessages.filter(m => m.role !== 'assistant' || aiMessages.indexOf(m) > 0).slice(-10).map(m => ({ role: m.role, content: m.content })),
+          ...aiMessages.slice(-10).map(m => ({ role: m.role, content: m.content })),
         ],
         max_tokens: 500,
       }),
