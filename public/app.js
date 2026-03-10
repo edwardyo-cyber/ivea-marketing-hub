@@ -196,7 +196,10 @@ async function showApp() {
 
 // --- Sidebar ---
 const NAV_ITEMS = [
-  { section: null, items: [{ id: 'dashboard', icon: 'layout-dashboard', label: 'Dashboard' }] },
+  { section: null, items: [
+    { id: 'dashboard', icon: 'layout-dashboard', label: 'Dashboard' },
+    { id: 'restaurants', icon: 'store', label: 'Restaurants' },
+  ] },
   { section: 'Content', items: [
     { id: 'content', icon: 'file-text', label: 'Content Hub' },
     { id: 'calendar', icon: 'calendar', label: 'Unified Calendar' },
@@ -293,6 +296,7 @@ function navigate(page) {
   showLoading(pc);
   const pages = {
     'dashboard': renderDashboard,
+    'restaurants': renderRestaurants,
     'content': renderContent,
     'calendar': renderCalendar,
     'influencers': renderInfluencers,
@@ -459,6 +463,194 @@ async function renderDashboard(container) {
   `;
   lucide.createIcons({ nameAttr: 'data-lucide' });
 }
+
+// ============================================
+// PAGE: Restaurants
+// ============================================
+async function renderRestaurants(container) {
+  const { data: restaurants } = await sb.from('restaurants').select('*').order('name');
+  const items = restaurants || [];
+  let statusFilter = '';
+  let selected = new Set();
+
+  const totalLocations = items.reduce((s, r) => s + (r.location_count || 0), 0);
+  const activeCount = items.filter(r => r.status === 'active').length;
+  const inactiveCount = items.filter(r => r.status !== 'active').length;
+
+  function filtered() {
+    return statusFilter ? items.filter(r => r.status === statusFilter) : items;
+  }
+
+  function rowHTML(r) {
+    const initials = (r.name || '').split(' ').map(w => w[0]).join('').substring(0, 2).toUpperCase();
+    return `<tr data-id="${r.id}">
+      <td><input type="checkbox" class="rest-check" value="${r.id}"></td>
+      <td>
+        <div style="display:flex;align-items:center;gap:10px">
+          <div class="rest-avatar">${r.brand_logo_url ? `<img src="${r.brand_logo_url}" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:50%">` : initials}</div>
+          <span style="font-weight:500">${r.name}</span>
+        </div>
+      </td>
+      <td>${r.location_count || 0}</td>
+      <td>${badgeHTML(r.status || 'active')}</td>
+      <td>${formatDate(r.created_at)}</td>
+      <td class="table-actions">
+        <button class="btn-icon btn-ghost" onclick="editRestaurant('${r.id}')"><i data-lucide="edit-2"></i></button>
+        <button class="btn-icon btn-ghost" onclick="deleteRestaurant('${r.id}')"><i data-lucide="trash-2"></i></button>
+      </td>
+    </tr>`;
+  }
+
+  function render() {
+    const f = filtered();
+    container.innerHTML = `
+      <h1 class="page-title">Restaurants</h1>
+      <p class="page-subtitle">Manage all restaurant brands and locations</p>
+      <div class="kpi-grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:24px">
+        <div class="kpi-card"><div class="kpi-label">Total Brands</div><div class="kpi-value">${items.length}</div></div>
+        <div class="kpi-card"><div class="kpi-label">Total Locations</div><div class="kpi-value" style="color:var(--accent)">${totalLocations}</div></div>
+        <div class="kpi-card"><div class="kpi-label">Active</div><div class="kpi-value" style="color:var(--success)">${activeCount}</div></div>
+        <div class="kpi-card"><div class="kpi-label">Inactive</div><div class="kpi-value" style="color:var(--text-muted)">${inactiveCount}</div></div>
+      </div>
+      <div class="table-toolbar">
+        <div class="search-filter"><i data-lucide="search"></i><input type="text" placeholder="Search restaurants..." id="rest-filter"></div>
+        <select class="form-select" style="width:130px" id="rest-status-filter">
+          <option value="">All Status</option>
+          <option value="active" ${statusFilter === 'active' ? 'selected' : ''}>Active</option>
+          <option value="inactive" ${statusFilter === 'inactive' ? 'selected' : ''}>Inactive</option>
+        </select>
+        <div style="margin-left:auto;display:flex;gap:8px">
+          <button class="btn btn-secondary btn-sm" id="rest-export"><i data-lucide="download"></i> Export</button>
+          <button class="btn btn-primary btn-sm" id="new-rest-btn"><i data-lucide="plus"></i> Add Restaurant</button>
+        </div>
+      </div>
+      <div id="rest-bulk-bar"></div>
+      <div class="table-wrapper">
+        <table>
+          <thead><tr>
+            <th style="width:36px"><input type="checkbox" id="rest-select-all"></th>
+            <th data-key="name">Brand Name</th>
+            <th data-key="location_count">Locations</th>
+            <th data-key="status">Status</th>
+            <th data-key="created_at">Added</th>
+            <th>Actions</th>
+          </tr></thead>
+          <tbody id="rest-tbody">${f.map(rowHTML).join('')}</tbody>
+        </table>
+      </div>
+    `;
+    lucide.createIcons({ nameAttr: 'data-lucide' });
+
+    // Status filter
+    $('#rest-status-filter').onchange = (e) => { statusFilter = e.target.value; render(); };
+
+    // Search
+    $('#rest-filter')?.addEventListener('input', (e) => {
+      const q = e.target.value.toLowerCase();
+      $$('#rest-tbody tr').forEach(tr => {
+        tr.style.display = tr.textContent.toLowerCase().includes(q) ? '' : 'none';
+      });
+    });
+
+    // Export
+    $('#rest-export').onclick = () => csvExport(f, 'restaurants');
+    // New
+    $('#new-rest-btn').onclick = () => editRestaurant(null);
+
+    // Bulk select
+    selected = new Set();
+    function bindCheck() {
+      $$('.rest-check').forEach(cb => {
+        cb.onchange = () => { if (cb.checked) selected.add(cb.value); else selected.delete(cb.value); updateBulk(); };
+      });
+    }
+    function updateBulk() {
+      const bar = $('#rest-bulk-bar');
+      if (!selected.size) { bar.innerHTML = ''; return; }
+      bar.innerHTML = `<div class="bulk-bar">${selected.size} selected
+        <select class="form-select" style="width:130px;margin-left:8px" id="bulk-rest-status">
+          <option value="">Change Status...</option>
+          <option value="active">Active</option>
+          <option value="inactive">Inactive</option>
+        </select>
+        <button class="btn btn-danger btn-sm" id="bulk-delete-rest">Delete</button>
+      </div>`;
+      $('#bulk-rest-status').onchange = async function() {
+        if (!this.value) return;
+        for (const id of selected) await sb.from('restaurants').update({ status: this.value }).eq('id', id);
+        toast('Status updated', 'success');
+        navigate('restaurants');
+      };
+      $('#bulk-delete-rest').onclick = () => openConfirm('Delete Restaurants', `Delete ${selected.size} restaurant(s)?`, async () => {
+        for (const id of selected) await sb.from('restaurants').delete().eq('id', id);
+        toast('Deleted', 'success');
+        navigate('restaurants');
+      });
+    }
+    bindCheck();
+    const selectAll = $('#rest-select-all');
+    if (selectAll) selectAll.onchange = () => {
+      $$('.rest-check').forEach(cb => { cb.checked = selectAll.checked; if (cb.checked) selected.add(cb.value); else selected.delete(cb.value); });
+      updateBulk();
+    };
+
+    // Sortable
+    const table = $('table', container);
+    if (table) makeSortable(table, f, rowHTML, $('#rest-tbody'));
+  }
+  render();
+}
+
+window.editRestaurant = async function(id) {
+  let r = {};
+  if (id) {
+    const { data } = await sb.from('restaurants').select('*').eq('id', id).single();
+    r = data || {};
+  }
+  openModal(id ? 'Edit Restaurant' : 'Add Restaurant', `
+    <div class="form-group"><label class="form-label">Brand Name</label><input class="form-input" id="rest-name" value="${r.name || ''}"></div>
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">Location Count</label><input class="form-input" type="number" id="rest-locations" value="${r.location_count || 1}" min="1"></div>
+      <div class="form-group"><label class="form-label">Status</label>
+        <select class="form-select" id="rest-status">
+          <option value="active" ${r.status === 'active' || !r.status ? 'selected' : ''}>Active</option>
+          <option value="inactive" ${r.status === 'inactive' ? 'selected' : ''}>Inactive</option>
+        </select>
+      </div>
+    </div>
+    <div class="form-group"><label class="form-label">Brand Logo URL (optional)</label><input class="form-input" id="rest-logo" value="${r.brand_logo_url || ''}" placeholder="https://..."></div>
+  `, `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button><button class="btn btn-primary" id="save-rest-btn">Save</button>`);
+
+  $('#save-rest-btn').onclick = async () => {
+    const name = $('#rest-name').value.trim();
+    if (!name) return toast('Brand name is required', 'error');
+    const obj = {
+      name,
+      location_count: parseInt($('#rest-locations').value) || 1,
+      status: $('#rest-status').value,
+      brand_logo_url: $('#rest-logo').value.trim(),
+    };
+    if (id) {
+      await sb.from('restaurants').update(obj).eq('id', id);
+      await logActivity('update_restaurant', `Updated: ${name}`);
+    } else {
+      await sb.from('restaurants').insert(obj);
+      await logActivity('create_restaurant', `Added: ${name}`);
+    }
+    closeModal();
+    toast(id ? 'Restaurant updated' : 'Restaurant added', 'success');
+    navigate('restaurants');
+  };
+};
+
+window.deleteRestaurant = function(id) {
+  openConfirm('Delete Restaurant', 'Are you sure you want to delete this restaurant?', async () => {
+    await sb.from('restaurants').delete().eq('id', id);
+    await logActivity('delete_restaurant', 'Deleted a restaurant');
+    toast('Restaurant deleted', 'success');
+    navigate('restaurants');
+  });
+};
 
 // ============================================
 // PAGE: Content Hub
@@ -2740,6 +2932,7 @@ window.syncGoogleReviews = async function() {
 let aiLastSuggestPage = null;
 
 const PAGE_CONTEXTS = {
+  'restaurants': { label: 'Restaurants', prompt: 'The user is on the Restaurants page viewing all 35+ restaurant brands and their location counts. Suggest brand marketing strategies, multi-location coordination tips, brand consistency ideas, and ways to leverage the restaurant portfolio for cross-promotion.' },
   'dashboard': { label: 'Dashboard', prompt: 'The user is on the main Dashboard which shows KPIs (team members, brands, locations, posts this month, active campaigns, avg engagement), quick actions, action insights, and recent activity. Provide 3-4 actionable suggestions to improve their marketing performance based on typical restaurant group KPIs.' },
   'content': { label: 'Content Hub', prompt: 'The user is on the Content Hub page managing social media posts across platforms (Instagram, Facebook, TikTok, Twitter, LinkedIn). Posts can be published directly to social media via Ayrshare integration. AI content generation is available. Suggest content ideas, posting strategies, trending formats, and engagement tips for a multi-brand restaurant group.' },
   'content-calendar': { label: 'Unified Calendar', prompt: 'The user is on the Content Calendar page which shows a monthly view of scheduled posts and campaigns. Suggest optimal posting schedules, content themes for this month, and ways to maintain consistent posting across 35+ restaurant brands.' },
