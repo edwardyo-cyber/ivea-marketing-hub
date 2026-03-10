@@ -1804,3 +1804,125 @@ input[type="checkbox"] {
     min-height: 400px;
   }
 }
+
+/* ============================================
+   Brand Card Grid
+   ============================================ */
+.brand-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+  margin-top: 16px;
+}
+@media (max-width: 900px) { .brand-grid { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 600px) { .brand-grid { grid-template-columns: 1fr; } }
+
+.brand-card {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 16px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.brand-card:hover {
+  border-color: var(--accent);
+  box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+  transform: translateY(-1px);
+}
+.brand-card-logo {
+  width: 44px; height: 44px;
+  border-radius: 10px;
+  background: rgba(79,152,163,0.12);
+  display: flex; align-items: center; justify-content: center;
+  font-weight: 700; font-size: 16px; color: var(--accent);
+  flex-shrink: 0; overflow: hidden;
+}
+.brand-card-logo img { width: 100%; height: 100%; object-fit: cover; border-radius: 10px; }
+.brand-card-info { flex: 1; min-width: 0; }
+.brand-card-name { font-weight: 600; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.brand-card-meta { display: flex; gap: 6px; margin-top: 4px; align-items: center; flex-wrap: wrap; }
+
+/* Badge accent variant */
+.badge-accent { background: rgba(79,152,163,0.12); color: var(--accent); }
+
+/* ============================================
+   Breadcrumb
+   ============================================ */
+.breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text-muted);
+  margin-bottom: 16px;
+}
+.breadcrumb-link {
+  cursor: pointer;
+  color: var(--accent);
+  font-weight: 500;
+}
+.breadcrumb-link:hover { text-decoration: underline; }
+
+/* ============================================
+   Restaurant Detail Header
+   ============================================ */
+.rest-detail-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 24px;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+
+/* ============================================
+   Location Cards
+   ============================================ */
+.locations-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 14px;
+}
+.location-card {
+  padding: 16px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.location-card:hover {
+  border-color: var(--accent);
+  box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+}
+.location-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+.location-card-name { font-weight: 600; font-size: 15px; }
+.location-card-detail {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text-muted);
+  margin-top: 4px;
+}
+
+/* ============================================
+   Media URL indicator
+   ============================================ */
+.media-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--accent);
+  vertical-align: middle;
+}

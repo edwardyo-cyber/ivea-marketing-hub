@@ -14,6 +14,8 @@ let currentPage = 'dashboard';
 let aiMessages = [];
 let notifications = [];
 let chartInstances = {};
+let selectedRestaurantId = null;
+let restaurantLocationsCache = {};
 
 // --- Helpers ---
 const $ = (sel, ctx = document) => ctx.querySelector(sel);
@@ -108,6 +110,17 @@ async function logActivity(action, details) {
 
 function showLoading(container) {
   container.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+}
+
+// --- Missing helpers ---
+function escapeHtml(str) {
+  if (!str) return '';
+  return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+const showToast = toast;
+
+function canEdit() {
+  return !hasRole('Viewer');
 }
 
 // --- Storage helpers (graceful fallback for sandboxed iframes) ---
@@ -280,6 +293,7 @@ function renderHeader() {
 // --- Routing ---
 function navigate(page) {
   currentPage = page;
+  if (page !== 'restaurants') selectedRestaurantId = null;
   // Update sidebar active
   $$('.nav-item').forEach(n => n.classList.remove('active'));
   $$('.nav-item').forEach(n => {
@@ -467,138 +481,141 @@ async function renderDashboard(container) {
 // ============================================
 // PAGE: Restaurants
 // ============================================
+// --- Restaurant Locations helpers ---
+async function getRestaurantLocations(restaurantId) {
+  if (restaurantLocationsCache[restaurantId]) return restaurantLocationsCache[restaurantId];
+  try {
+    const { data } = await sb.from('settings').select('value').eq('key', `locations_${restaurantId}`).single();
+    const locations = data?.value ? JSON.parse(data.value) : [];
+    restaurantLocationsCache[restaurantId] = locations;
+    return locations;
+  } catch { restaurantLocationsCache[restaurantId] = []; return []; }
+}
+
+async function saveRestaurantLocations(restaurantId, locations) {
+  restaurantLocationsCache[restaurantId] = locations;
+  const key = `locations_${restaurantId}`;
+  try {
+    const { data: existing } = await sb.from('settings').select('key').eq('key', key).single();
+    if (existing) {
+      await sb.from('settings').update({ value: JSON.stringify(locations) }).eq('key', key);
+    } else {
+      await sb.from('settings').insert({ key, value: JSON.stringify(locations) });
+    }
+  } catch {
+    await sb.from('settings').insert({ key, value: JSON.stringify(locations) });
+  }
+}
+
 async function renderRestaurants(container) {
+  if (selectedRestaurantId) {
+    return renderRestaurantDetail(container, selectedRestaurantId);
+  }
+
   const { data: restaurants } = await sb.from('restaurants').select('*').order('name');
   const items = restaurants || [];
-  let statusFilter = '';
-  let selected = new Set();
-
   const totalLocations = items.reduce((s, r) => s + (r.location_count || 0), 0);
   const activeCount = items.filter(r => r.status === 'active').length;
   const inactiveCount = items.filter(r => r.status !== 'active').length;
 
-  function filtered() {
-    return statusFilter ? items.filter(r => r.status === statusFilter) : items;
-  }
-
-  function rowHTML(r) {
+  function brandCardHTML(r) {
     const initials = (r.name || '').split(' ').map(w => w[0]).join('').substring(0, 2).toUpperCase();
-    return `<tr data-id="${r.id}">
-      <td><input type="checkbox" class="rest-check" value="${r.id}"></td>
-      <td>
-        <div style="display:flex;align-items:center;gap:10px">
-          <div class="rest-avatar">${r.brand_logo_url ? `<img src="${r.brand_logo_url}" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:50%">` : initials}</div>
-          <span style="font-weight:500">${r.name}</span>
+    return `<div class="brand-card" data-id="${r.id}" onclick="openBrandDetail('${r.id}')">
+      <div class="brand-card-logo">${r.brand_logo_url ? `<img src="${r.brand_logo_url}" alt="">` : `<span>${initials}</span>`}</div>
+      <div class="brand-card-info">
+        <div class="brand-card-name">${r.name}</div>
+        <div class="brand-card-meta">
+          <span class="badge badge-accent">${r.location_count || 0} location${(r.location_count || 0) !== 1 ? 's' : ''}</span>
+          ${badgeHTML(r.status || 'active')}
         </div>
-      </td>
-      <td>${r.location_count || 0}</td>
-      <td>${badgeHTML(r.status || 'active')}</td>
-      <td>${formatDate(r.created_at)}</td>
-      <td class="table-actions">
-        <button class="btn-icon btn-ghost" onclick="editRestaurant('${r.id}')"><i data-lucide="edit-2"></i></button>
-        <button class="btn-icon btn-ghost" onclick="deleteRestaurant('${r.id}')"><i data-lucide="trash-2"></i></button>
-      </td>
-    </tr>`;
+      </div>
+      <i data-lucide="chevron-right" style="color:var(--text-muted)"></i>
+    </div>`;
   }
 
-  function render() {
-    const f = filtered();
-    container.innerHTML = `
-      <h1 class="page-title">Restaurants</h1>
-      <p class="page-subtitle">Manage all restaurant brands and locations</p>
-      <div class="kpi-grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:24px">
-        <div class="kpi-card"><div class="kpi-label">Total Brands</div><div class="kpi-value">${items.length}</div></div>
-        <div class="kpi-card"><div class="kpi-label">Total Locations</div><div class="kpi-value" style="color:var(--accent)">${totalLocations}</div></div>
-        <div class="kpi-card"><div class="kpi-label">Active</div><div class="kpi-value" style="color:var(--success)">${activeCount}</div></div>
-        <div class="kpi-card"><div class="kpi-label">Inactive</div><div class="kpi-value" style="color:var(--text-muted)">${inactiveCount}</div></div>
+  container.innerHTML = `
+    <h1 class="page-title">Restaurants</h1>
+    <p class="page-subtitle">Manage all restaurant brands and locations</p>
+    <div class="kpi-grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:24px">
+      <div class="kpi-card"><div class="kpi-label">Total Brands</div><div class="kpi-value">${items.length}</div></div>
+      <div class="kpi-card"><div class="kpi-label">Total Locations</div><div class="kpi-value" style="color:var(--accent)">${totalLocations}</div></div>
+      <div class="kpi-card"><div class="kpi-label">Active</div><div class="kpi-value" style="color:var(--success)">${activeCount}</div></div>
+      <div class="kpi-card"><div class="kpi-label">Inactive</div><div class="kpi-value" style="color:var(--text-muted)">${inactiveCount}</div></div>
+    </div>
+    <div class="table-toolbar">
+      <div class="search-filter"><i data-lucide="search"></i><input type="text" placeholder="Search brands..." id="rest-filter"></div>
+      <div style="margin-left:auto;display:flex;gap:8px">
+        <button class="btn btn-secondary btn-sm" id="rest-export"><i data-lucide="download"></i> Export</button>
+        ${canEdit() ? `<button class="btn btn-primary btn-sm" id="new-rest-btn"><i data-lucide="plus"></i> Add Restaurant</button>` : ''}
       </div>
-      <div class="table-toolbar">
-        <div class="search-filter"><i data-lucide="search"></i><input type="text" placeholder="Search restaurants..." id="rest-filter"></div>
-        <select class="form-select" style="width:130px" id="rest-status-filter">
-          <option value="">All Status</option>
-          <option value="active" ${statusFilter === 'active' ? 'selected' : ''}>Active</option>
-          <option value="inactive" ${statusFilter === 'inactive' ? 'selected' : ''}>Inactive</option>
-        </select>
-        <div style="margin-left:auto;display:flex;gap:8px">
-          <button class="btn btn-secondary btn-sm" id="rest-export"><i data-lucide="download"></i> Export</button>
-          <button class="btn btn-primary btn-sm" id="new-rest-btn"><i data-lucide="plus"></i> Add Restaurant</button>
-        </div>
-      </div>
-      <div id="rest-bulk-bar"></div>
-      <div class="table-wrapper">
-        <table>
-          <thead><tr>
-            <th style="width:36px"><input type="checkbox" id="rest-select-all"></th>
-            <th data-key="name">Brand Name</th>
-            <th data-key="location_count">Locations</th>
-            <th data-key="status">Status</th>
-            <th data-key="created_at">Added</th>
-            <th>Actions</th>
-          </tr></thead>
-          <tbody id="rest-tbody">${f.map(rowHTML).join('')}</tbody>
-        </table>
-      </div>
-    `;
-    lucide.createIcons({ nameAttr: 'data-lucide' });
+    </div>
+    <div class="brand-grid" id="brand-grid">
+      ${items.map(brandCardHTML).join('')}
+    </div>
+  `;
+  lucide.createIcons({ nameAttr: 'data-lucide' });
 
-    // Status filter
-    $('#rest-status-filter').onchange = (e) => { statusFilter = e.target.value; render(); };
-
-    // Search
-    $('#rest-filter')?.addEventListener('input', (e) => {
-      const q = e.target.value.toLowerCase();
-      $$('#rest-tbody tr').forEach(tr => {
-        tr.style.display = tr.textContent.toLowerCase().includes(q) ? '' : 'none';
-      });
+  // Search
+  $('#rest-filter')?.addEventListener('input', (e) => {
+    const q = e.target.value.toLowerCase();
+    $$('.brand-card').forEach(card => {
+      card.style.display = card.textContent.toLowerCase().includes(q) ? '' : 'none';
     });
+  });
 
-    // Export
-    $('#rest-export').onclick = () => csvExport(f, 'restaurants');
-    // New
-    $('#new-rest-btn').onclick = () => editRestaurant(null);
+  // Export
+  $('#rest-export').onclick = () => csvExport(items, 'restaurants');
+  // New
+  const newBtn = $('#new-rest-btn');
+  if (newBtn) newBtn.onclick = () => editRestaurant(null);
+}
 
-    // Bulk select
-    selected = new Set();
-    function bindCheck() {
-      $$('.rest-check').forEach(cb => {
-        cb.onchange = () => { if (cb.checked) selected.add(cb.value); else selected.delete(cb.value); updateBulk(); };
-      });
-    }
-    function updateBulk() {
-      const bar = $('#rest-bulk-bar');
-      if (!selected.size) { bar.innerHTML = ''; return; }
-      bar.innerHTML = `<div class="bulk-bar">${selected.size} selected
-        <select class="form-select" style="width:130px;margin-left:8px" id="bulk-rest-status">
-          <option value="">Change Status...</option>
-          <option value="active">Active</option>
-          <option value="inactive">Inactive</option>
-        </select>
-        <button class="btn btn-danger btn-sm" id="bulk-delete-rest">Delete</button>
-      </div>`;
-      $('#bulk-rest-status').onchange = async function() {
-        if (!this.value) return;
-        for (const id of selected) await sb.from('restaurants').update({ status: this.value }).eq('id', id);
-        toast('Status updated', 'success');
-        navigate('restaurants');
-      };
-      $('#bulk-delete-rest').onclick = () => openConfirm('Delete Restaurants', `Delete ${selected.size} restaurant(s)?`, async () => {
-        for (const id of selected) await sb.from('restaurants').delete().eq('id', id);
-        toast('Deleted', 'success');
-        navigate('restaurants');
-      });
-    }
-    bindCheck();
-    const selectAll = $('#rest-select-all');
-    if (selectAll) selectAll.onchange = () => {
-      $$('.rest-check').forEach(cb => { cb.checked = selectAll.checked; if (cb.checked) selected.add(cb.value); else selected.delete(cb.value); });
-      updateBulk();
-    };
+async function renderRestaurantDetail(container, id) {
+  const { data: restaurant } = await sb.from('restaurants').select('*').eq('id', id).single();
+  if (!restaurant) { selectedRestaurantId = null; renderRestaurants(container); return; }
+  const locations = await getRestaurantLocations(id);
+  const initials = (restaurant.name || '').split(' ').map(w => w[0]).join('').substring(0, 2).toUpperCase();
 
-    // Sortable
-    const table = $('table', container);
-    if (table) makeSortable(table, f, rowHTML, $('#rest-tbody'));
-  }
-  render();
+  container.innerHTML = `
+    <div class="breadcrumb">
+      <span class="breadcrumb-link" onclick="selectedRestaurantId=null;navigate('restaurants')">Restaurants</span>
+      <i data-lucide="chevron-right" style="width:14px;height:14px"></i>
+      <span>${restaurant.name}</span>
+    </div>
+    <div class="rest-detail-header">
+      <div style="display:flex;align-items:center;gap:16px">
+        <div class="rest-avatar" style="width:56px;height:56px;font-size:22px">${restaurant.brand_logo_url ? `<img src="${restaurant.brand_logo_url}" style="width:100%;height:100%;object-fit:cover;border-radius:50%">` : initials}</div>
+        <div>
+          <h1 class="page-title" style="margin:0">${restaurant.name}</h1>
+          <div style="display:flex;gap:8px;margin-top:4px;align-items:center">${badgeHTML(restaurant.status || 'active')} <span style="color:var(--text-muted);font-size:13px">${locations.length} location${locations.length !== 1 ? 's' : ''}</span></div>
+        </div>
+      </div>
+      ${canEdit() ? `<div style="display:flex;gap:8px">
+        <button class="btn btn-secondary btn-sm" onclick="editRestaurant('${id}')"><i data-lucide="edit-2"></i> Edit Brand</button>
+        <button class="btn btn-primary btn-sm" id="add-location-btn"><i data-lucide="plus"></i> Add Location</button>
+      </div>` : ''}
+    </div>
+    <div class="locations-grid" id="locations-grid">
+      ${locations.length === 0 ? `<div class="empty-state" style="padding:40px;text-align:center;grid-column:1/-1">
+        <i data-lucide="map-pin" style="width:40px;height:40px;color:var(--text-muted)"></i>
+        <p style="margin-top:8px;color:var(--text-muted)">No locations added yet</p>
+        ${canEdit() ? '<button class="btn btn-primary btn-sm" style="margin-top:12px" id="add-location-empty"><i data-lucide="plus"></i> Add First Location</button>' : ''}
+      </div>` : locations.map((loc, i) => `
+        <div class="location-card" onclick="viewLocation('${id}', ${i})">
+          <div class="location-card-header">
+            <div class="location-card-name">${loc.name || 'Location ' + (i + 1)}</div>
+            ${badgeHTML(loc.status || 'active')}
+          </div>
+          <div class="location-card-detail"><i data-lucide="map-pin" style="width:14px;height:14px"></i> ${loc.address || '—'}${loc.city ? ', ' + loc.city : ''}${loc.state ? ', ' + loc.state : ''}</div>
+          ${loc.manager ? `<div class="location-card-detail"><i data-lucide="user" style="width:14px;height:14px"></i> ${loc.manager}</div>` : ''}
+          ${loc.phone ? `<div class="location-card-detail"><i data-lucide="phone" style="width:14px;height:14px"></i> ${loc.phone}</div>` : ''}
+        </div>`).join('')}
+    </div>
+  `;
+  lucide.createIcons({ nameAttr: 'data-lucide' });
+
+  const addBtn = $('#add-location-btn') || $('#add-location-empty');
+  if (addBtn) addBtn.onclick = () => editLocation(id, null);
 }
 
 window.editRestaurant = async function(id) {
@@ -609,14 +626,11 @@ window.editRestaurant = async function(id) {
   }
   openModal(id ? 'Edit Restaurant' : 'Add Restaurant', `
     <div class="form-group"><label class="form-label">Brand Name</label><input class="form-input" id="rest-name" value="${r.name || ''}"></div>
-    <div class="form-row">
-      <div class="form-group"><label class="form-label">Location Count</label><input class="form-input" type="number" id="rest-locations" value="${r.location_count || 1}" min="1"></div>
-      <div class="form-group"><label class="form-label">Status</label>
-        <select class="form-select" id="rest-status">
-          <option value="active" ${r.status === 'active' || !r.status ? 'selected' : ''}>Active</option>
-          <option value="inactive" ${r.status === 'inactive' ? 'selected' : ''}>Inactive</option>
-        </select>
-      </div>
+    <div class="form-group"><label class="form-label">Status</label>
+      <select class="form-select" id="rest-status">
+        <option value="active" ${r.status === 'active' || !r.status ? 'selected' : ''}>Active</option>
+        <option value="inactive" ${r.status === 'inactive' ? 'selected' : ''}>Inactive</option>
+      </select>
     </div>
     <div class="form-group"><label class="form-label">Brand Logo URL (optional)</label><input class="form-input" id="rest-logo" value="${r.brand_logo_url || ''}" placeholder="https://..."></div>
   `, `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button><button class="btn btn-primary" id="save-rest-btn">Save</button>`);
@@ -626,7 +640,6 @@ window.editRestaurant = async function(id) {
     if (!name) return toast('Brand name is required', 'error');
     const obj = {
       name,
-      location_count: parseInt($('#rest-locations').value) || 1,
       status: $('#rest-status').value,
       brand_logo_url: $('#rest-logo').value.trim(),
     };
@@ -646,10 +659,95 @@ window.editRestaurant = async function(id) {
 window.deleteRestaurant = function(id) {
   openConfirm('Delete Restaurant', 'Are you sure you want to delete this restaurant?', async () => {
     await sb.from('restaurants').delete().eq('id', id);
+    // Clean up locations data
+    await sb.from('settings').delete().eq('key', `locations_${id}`);
+    delete restaurantLocationsCache[id];
     await logActivity('delete_restaurant', 'Deleted a restaurant');
     toast('Restaurant deleted', 'success');
+    selectedRestaurantId = null;
     navigate('restaurants');
   });
+};
+
+window.openBrandDetail = function(id) {
+  selectedRestaurantId = id;
+  navigate('restaurants');
+};
+
+window.viewLocation = function(restaurantId, index) {
+  editLocation(restaurantId, index);
+};
+
+window.editLocation = async function(restaurantId, index) {
+  const locations = await getRestaurantLocations(restaurantId);
+  const loc = index !== null && index !== undefined ? locations[index] : {};
+  const isEdit = index !== null && index !== undefined;
+
+  openModal(isEdit ? 'Edit Location' : 'Add Location', `
+    <div class="form-group"><label class="form-label">Location Name</label><input class="form-input" id="loc-name" value="${loc.name || ''}" placeholder="e.g. Pentagon City, Tysons Corner"></div>
+    <div class="form-group"><label class="form-label">Address</label><input class="form-input" id="loc-address" value="${loc.address || ''}"></div>
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">City</label><input class="form-input" id="loc-city" value="${loc.city || ''}"></div>
+      <div class="form-group"><label class="form-label">State</label><input class="form-input" id="loc-state" value="${loc.state || ''}"></div>
+      <div class="form-group"><label class="form-label">ZIP</label><input class="form-input" id="loc-zip" value="${loc.zip || ''}"></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">Phone</label><input class="form-input" id="loc-phone" value="${loc.phone || ''}"></div>
+      <div class="form-group"><label class="form-label">Email</label><input class="form-input" id="loc-email" value="${loc.email || ''}"></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">Manager</label><input class="form-input" id="loc-manager" value="${loc.manager || ''}"></div>
+      <div class="form-group"><label class="form-label">Status</label>
+        <select class="form-select" id="loc-status">
+          <option value="active" ${loc.status === 'active' || !loc.status ? 'selected' : ''}>Active</option>
+          <option value="inactive" ${loc.status === 'inactive' ? 'selected' : ''}>Inactive</option>
+        </select>
+      </div>
+    </div>
+    <div class="form-group"><label class="form-label">Google Business ID</label><input class="form-input" id="loc-gbp" value="${loc.google_business_id || ''}" placeholder="For review syncing"></div>
+    <div class="form-group"><label class="form-label">Notes</label><textarea class="form-textarea" id="loc-notes" rows="2">${loc.notes || ''}</textarea></div>
+  `, `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button>${isEdit ? '<button class="btn btn-danger" id="delete-loc-btn" style="margin-right:auto">Delete</button>' : ''}<button class="btn btn-primary" id="save-loc-btn">Save</button>`);
+
+  $('#save-loc-btn').onclick = async () => {
+    const obj = {
+      name: $('#loc-name').value.trim(),
+      address: $('#loc-address').value.trim(),
+      city: $('#loc-city').value.trim(),
+      state: $('#loc-state').value.trim(),
+      zip: $('#loc-zip').value.trim(),
+      phone: $('#loc-phone').value.trim(),
+      email: $('#loc-email').value.trim(),
+      manager: $('#loc-manager').value.trim(),
+      status: $('#loc-status').value,
+      google_business_id: $('#loc-gbp').value.trim(),
+      notes: $('#loc-notes').value.trim(),
+    };
+    if (!obj.name) return toast('Location name is required', 'error');
+    if (isEdit) {
+      locations[index] = obj;
+    } else {
+      locations.push(obj);
+    }
+    await saveRestaurantLocations(restaurantId, locations);
+    await sb.from('restaurants').update({ location_count: locations.length }).eq('id', restaurantId);
+    closeModal();
+    toast(isEdit ? 'Location updated' : 'Location added', 'success');
+    await logActivity(isEdit ? 'update_location' : 'create_location', `${isEdit ? 'Updated' : 'Added'}: ${obj.name}`);
+    navigate('restaurants');
+  };
+
+  const delBtn = $('#delete-loc-btn');
+  if (delBtn) delBtn.onclick = async () => {
+    openConfirm('Delete Location', `Delete "${loc.name || 'this location'}"?`, async () => {
+      locations.splice(index, 1);
+      await saveRestaurantLocations(restaurantId, locations);
+      await sb.from('restaurants').update({ location_count: locations.length }).eq('id', restaurantId);
+      closeModal();
+      toast('Location deleted', 'success');
+      await logActivity('delete_location', `Deleted: ${loc.name}`);
+      navigate('restaurants');
+    });
+  };
 };
 
 // ============================================
@@ -700,7 +798,7 @@ async function renderPostsTab(container) {
       </select>
       <div style="margin-left:auto;display:flex;gap:8px">
         <button class="btn btn-secondary btn-sm" onclick="csvExport(${JSON.stringify(filtered).replace(/"/g, '&quot;')}, 'posts')"><i data-lucide="download"></i> Export</button>
-        <button class="btn btn-primary btn-sm" id="new-post-btn"><i data-lucide="plus"></i> New Post</button>
+        ${canEdit() ? '<button class="btn btn-primary btn-sm" id="new-post-btn"><i data-lucide="plus"></i> New Post</button>' : ''}
       </div>
     </div>
     <div id="posts-bulk-bar"></div>
@@ -723,9 +821,10 @@ async function renderPostsTab(container) {
 
   function postRow(p) {
     const platforms = parseJSON(p.platforms).map(pl => `<span class="badge badge-platform">${pl}</span>`).join(' ');
+    const hasMedia = parseJSON(p.media_urls).length > 0;
     return `<tr data-id="${p.id}">
       <td><input type="checkbox" class="post-check" value="${p.id}"></td>
-      <td>${p.title || 'Untitled'}</td>
+      <td>${p.title || 'Untitled'}${hasMedia ? ' <span class="media-indicator"><i data-lucide="image" style="width:14px;height:14px"></i></span>' : ''}</td>
       <td>${platforms}</td>
       <td>${badgeHTML(p.status)}</td>
       <td>${formatDate(p.scheduled_date)}</td>
@@ -842,6 +941,10 @@ window.editPost = async function(id) {
       <div class="form-group"><label class="form-label">Scheduled Time</label><input class="form-input" type="time" id="post-time" value="${post.scheduled_time || ''}"></div>
     </div>
     <div class="form-group"><label class="form-label">Tags (comma-separated)</label><input class="form-input" id="post-tags" value="${parseJSON(post.tags).join(', ')}"></div>
+    <div class="form-group"><label class="form-label">Media URLs</label>
+      <textarea class="form-textarea" id="post-media-urls" rows="2" placeholder="Paste image or video URLs, one per line (e.g. https://example.com/photo.jpg)">${parseJSON(post.media_urls).join('\n')}</textarea>
+      <small style="color:var(--text-muted)">These URLs are sent directly to social platforms when publishing. Supports images and videos.</small>
+    </div>
     <div class="form-group"><label class="form-label">Notes</label><textarea class="form-textarea" id="post-notes" rows="2">${post.notes || ''}</textarea></div>
   `, `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button><button class="btn btn-primary" id="save-post-btn">Save</button>`);
 
@@ -898,6 +1001,7 @@ Only output the JSON, nothing else.`, 400
       scheduled_date: $('#post-date').value || null,
       scheduled_time: $('#post-time').value || null,
       tags: $('#post-tags').value.split(',').map(t => t.trim()).filter(Boolean),
+      media_urls: $('#post-media-urls').value.split('\n').map(u => u.trim()).filter(Boolean),
       notes: $('#post-notes').value,
     };
     if (id) {
@@ -1184,7 +1288,7 @@ async function renderInfluencers(container) {
         <div class="search-filter"><i data-lucide="search"></i><input type="text" placeholder="Filter influencers..." id="inf-filter"></div>
         <div style="margin-left:auto;display:flex;gap:8px">
           <button class="btn btn-secondary btn-sm" id="inf-export"><i data-lucide="download"></i> Export</button>
-          <button class="btn btn-primary btn-sm" id="new-inf-btn"><i data-lucide="plus"></i> Add Influencer</button>
+          ${canEdit() ? '<button class="btn btn-primary btn-sm" id="new-inf-btn"><i data-lucide="plus"></i> Add Influencer</button>' : ''}
         </div>
       </div>
       <div id="inf-bulk-bar"></div>
@@ -1414,7 +1518,7 @@ async function renderCampaigns(container) {
       <div class="search-filter"><i data-lucide="search"></i><input type="text" placeholder="Filter campaigns..." id="camp-filter"></div>
       <div style="margin-left:auto;display:flex;gap:8px">
         <button class="btn btn-secondary btn-sm" id="camp-export"><i data-lucide="download"></i> Export</button>
-        <button class="btn btn-primary btn-sm" id="new-camp-btn"><i data-lucide="plus"></i> New Campaign</button>
+        ${canEdit() ? '<button class="btn btn-primary btn-sm" id="new-camp-btn"><i data-lucide="plus"></i> New Campaign</button>' : ''}
       </div>
     </div>
     <div class="table-wrapper">
@@ -1580,7 +1684,7 @@ async function renderMedia(container) {
         <div class="search-filter"><i data-lucide="search"></i><input type="text" placeholder="Filter contacts..." id="media-filter"></div>
         <div style="margin-left:auto;display:flex;gap:8px">
           <button class="btn btn-secondary btn-sm" id="media-export"><i data-lucide="download"></i> Export</button>
-          <button class="btn btn-primary btn-sm" id="new-media-btn"><i data-lucide="plus"></i> Add Contact</button>
+          ${canEdit() ? '<button class="btn btn-primary btn-sm" id="new-media-btn"><i data-lucide="plus"></i> Add Contact</button>' : ''}
         </div>
       </div>
       <div class="table-wrapper">
@@ -1751,7 +1855,7 @@ async function renderEmailSms(container) {
       <div class="search-filter"><i data-lucide="search"></i><input type="text" placeholder="Filter campaigns..." id="email-filter"></div>
       <div style="margin-left:auto;display:flex;gap:8px">
         <button class="btn btn-secondary btn-sm" id="email-export"><i data-lucide="download"></i> Export</button>
-        <button class="btn btn-primary btn-sm" id="new-email-btn"><i data-lucide="plus"></i> New Campaign</button>
+        ${canEdit() ? '<button class="btn btn-primary btn-sm" id="new-email-btn"><i data-lucide="plus"></i> New Campaign</button>' : ''}
       </div>
     </div>
     <div class="table-wrapper">
@@ -2444,7 +2548,7 @@ window.editEmployee = async function(id) {
     const { data } = await sb.from('employees').select('*').eq('id', id).single();
     e = data || {};
   }
-  const roles = ['Owner', 'Marketing Director', 'Content Creator', 'Social Media Coordinator'];
+  const roles = ['Owner', 'Marketing Director', 'Content Manager', 'Content Creator', 'Social Media Manager', 'Social Media Coordinator', 'Brand Manager', 'Viewer'];
   const colors = ['#4f98a3', '#ef4444', '#22c55e', '#f59e0b', '#8b5cf6', '#3b82f6', '#ec4899'];
   openModal(id ? 'Edit Team Member' : 'Add Team Member', `
     <div class="form-row">
@@ -2858,6 +2962,7 @@ window.publishPost = async function(id) {
 
   const caption = `${post.title || ''}\n\n${post.body || ''}`.trim();
   if (!caption) return toast('Post has no content to publish', 'error');
+  const mediaUrls = parseJSON(post.media_urls);
 
   openConfirm('Publish to Social Media',
     `Publish "${post.title}" to ${ayrPlatforms.join(', ')}?`,
@@ -2867,6 +2972,7 @@ window.publishPost = async function(id) {
         const isScheduled = post.scheduled_date && post.scheduled_time && new Date(`${post.scheduled_date}T${post.scheduled_time}`) > new Date();
         const endpoint = isScheduled ? 'schedule' : 'post';
         const body = { post: caption, platforms: ayrPlatforms };
+        if (mediaUrls.length) body.mediaUrls = mediaUrls;
         if (isScheduled) body.scheduleDate = new Date(`${post.scheduled_date}T${post.scheduled_time}`).toISOString();
 
         const res = await fetch(`/api/social?action=${endpoint}`, {
