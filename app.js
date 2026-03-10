@@ -205,9 +205,9 @@ const NAV_ITEMS = [
     { id: 'influencers', icon: 'users', label: 'Influencers' },
     { id: 'campaigns', icon: 'megaphone', label: 'Campaigns' },
     { id: 'media', icon: 'newspaper', label: 'Local Media' },
+    { id: 'email-sms', icon: 'mail', label: 'Email & SMS' },
   ]},
   { section: 'Communications', items: [
-    { id: 'email-sms', icon: 'mail', label: 'Email & SMS' },
     { id: 'reviews', icon: 'message-square', label: 'Reviews' },
   ]},
   { section: 'Analytics', items: [
