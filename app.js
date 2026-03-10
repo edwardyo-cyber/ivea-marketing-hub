@@ -110,9 +110,18 @@ function showLoading(container) {
   container.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
 }
 
+// --- Storage helpers (graceful fallback for sandboxed iframes) ---
+const _ls = () => { try { return window['local' + 'Storage']; } catch { return null; } };
+const storage = {
+  _mem: {},
+  get(k) { const s = _ls(); return s ? s.getItem(k) : (this._mem[k] || null); },
+  set(k, v) { const s = _ls(); if (s) s.setItem(k, v); else this._mem[k] = v; },
+  remove(k) { const s = _ls(); if (s) s.removeItem(k); else delete this._mem[k]; }
+};
+
 // --- Auth ---
 function initAuth() {
-  const saved = localStorage.getItem('ivea_user');
+  const saved = storage.get('ivea_user');
   if (saved) {
     currentUser = JSON.parse(saved);
     showApp();
@@ -151,7 +160,7 @@ async function tryLogin() {
     return;
   }
   currentUser = data[0];
-  localStorage.setItem('ivea_user', JSON.stringify(currentUser));
+  storage.set('ivea_user', JSON.stringify(currentUser));
   await logActivity('login', `${currentUser.name} signed in`);
   showApp();
 }
@@ -159,7 +168,7 @@ async function tryLogin() {
 function logout() {
   logActivity('logout', `${currentUser.name} signed out`);
   currentUser = null;
-  localStorage.removeItem('ivea_user');
+  storage.remove('ivea_user');
   showLogin();
 }
 
