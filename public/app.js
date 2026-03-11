@@ -1,5 +1,5 @@
 /* ============================================
-   IVEA Marketing Hub — Main Application
+   Hermes iMedia — Main Application
    ============================================ */
 
 // --- Supabase Init ---
@@ -136,7 +136,7 @@ const storage = {
 
 // --- Auth ---
 function initAuth() {
-  const saved = storage.get('ivea_user');
+  const saved = storage.get('hermes_user');
   if (saved) {
     currentUser = JSON.parse(saved);
     showApp();
@@ -175,7 +175,7 @@ async function tryLogin() {
     return;
   }
   currentUser = data[0];
-  storage.set('ivea_user', JSON.stringify(currentUser));
+  storage.set('hermes_user', JSON.stringify(currentUser));
   await logActivity('login', `${currentUser.name} signed in`);
   showApp();
 }
@@ -183,7 +183,7 @@ async function tryLogin() {
 function logout() {
   logActivity('logout', `${currentUser.name} signed out`);
   currentUser = null;
-  storage.remove('ivea_user');
+  storage.remove('hermes_user');
   showLogin();
 }
 
@@ -2330,7 +2330,7 @@ function openMediaEmailCompose(selectedContacts) {
     const btn = $('#media-email-ai');
     btn.disabled = true; btn.textContent = 'Drafting...';
     try {
-      const prompt = `Write a professional media outreach email for IVEA Restaurant Group. Subject: ${subject}. This is going to ${selectedContacts.length} media contacts in the DMV area (DC, Maryland, Virginia). Keep it concise, professional, and compelling. Include a clear call-to-action. Only return the email body, no subject line.`;
+      const prompt = `Write a professional media outreach email for Hermes Media Restaurant Group. Subject: ${subject}. This is going to ${selectedContacts.length} media contacts in the DMV area (DC, Maryland, Virginia). Keep it concise, professional, and compelling. Include a clear call-to-action. Only return the email body, no subject line.`;
       const resp = await fetch('https://api.openai.com/v1/chat/completions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${OPENAI_KEY}` },
@@ -3498,7 +3498,7 @@ window.deleteEmployee = function(id, name) {
     const pw = $('#delete-pw').value;
     // Check manager password from settings
     const { data: settings } = await sb.from('settings').select('value').eq('key', 'manager_password').single();
-    const correctPw = settings?.value || 'ivea';
+    const correctPw = settings?.value || 'hermes';
     if (pw !== correctPw) {
       $('#delete-pw-error').textContent = 'Incorrect password';
       return;
@@ -3812,7 +3812,7 @@ async function generateAIContent(prompt, maxTokens = 500) {
       body: JSON.stringify({
         model: 'gpt-4o-mini',
         messages: [
-          { role: 'system', content: 'You are a marketing expert for IVEA, a restaurant group managing 35 brands and 90+ locations in the DMV (DC, Maryland, Virginia) area. Generate professional, engaging marketing content. Be concise and creative.' },
+          { role: 'system', content: 'You are a marketing expert for Hermes Media, a restaurant group managing 35 brands and 90+ locations in the DMV (DC, Maryland, Virginia) area. Generate professional, engaging marketing content. Be concise and creative.' },
           { role: 'user', content: prompt }
         ],
         max_tokens: maxTokens,
@@ -3979,7 +3979,7 @@ async function generatePageSuggestions() {
     pageData = await gatherPageData();
   } catch(e) { /* no extra data */ }
 
-  const systemPrompt = `You are an AI marketing assistant for IVEA Marketing Hub, a restaurant group managing 35 brands and 90+ locations in the DMV (DC, Maryland, Virginia) area. Current user: ${currentUser.name} (${currentUser.role}).
+  const systemPrompt = `You are an AI marketing assistant for Hermes iMedia, a restaurant group managing 35 brands and 90+ locations in the DMV (DC, Maryland, Virginia) area. Current user: ${currentUser.name} (${currentUser.role}).
 
 ${pageCtx.prompt}
 
@@ -4075,7 +4075,7 @@ async function sendAIMessage() {
   renderAIMessages();
 
   const pageCtx = PAGE_CONTEXTS[currentPage] || { label: currentPage, prompt: '' };
-  const systemPrompt = `You are an AI marketing assistant for IVEA Marketing Hub, a restaurant group with 35 brands and 90+ locations in the DMV area. Current user: ${currentUser.name} (${currentUser.role}). Current page: ${pageCtx.label}. ${pageCtx.prompt} Be concise and actionable. Use markdown formatting.`;
+  const systemPrompt = `You are an AI marketing assistant for Hermes iMedia, a restaurant group with 35 brands and 90+ locations in the DMV area. Current user: ${currentUser.name} (${currentUser.role}). Current page: ${pageCtx.label}. ${pageCtx.prompt} Be concise and actionable. Use markdown formatting.`;
 
   try {
     const res = await fetch('https://api.openai.com/v1/chat/completions', {
@@ -4583,14 +4583,14 @@ function formatSmsDate(dateStr) {
 // Theme Toggle (Light / Dark)
 // ============================================
 function initTheme() {
-  const saved = localStorage.getItem('ivea-theme') || 'dark';
+  const saved = localStorage.getItem('hermes-theme') || localStorage.getItem('ivea-theme') || 'dark';
   applyTheme(saved);
   const toggle = document.getElementById('theme-toggle');
   if (toggle) toggle.addEventListener('click', () => {
     const current = document.documentElement.getAttribute('data-theme') || 'dark';
     const next = current === 'dark' ? 'light' : 'dark';
     applyTheme(next);
-    localStorage.setItem('ivea-theme', next);
+    localStorage.setItem('hermes-theme', next);
   });
 }
 
