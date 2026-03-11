@@ -2370,20 +2370,40 @@ function openMediaEmailCompose(selectedContacts) {
 // ============================================
 // PAGE: Email & SMS
 // ============================================
+let emailSmsTab = 'campaigns'; // 'campaigns' | 'audiences'
+
 async function renderEmailSms(container) {
   await getEmployees();
-  const { data: campaigns } = await sb.from('email_campaigns').select('*').order('created_at', { ascending: false });
-  const { data: lists } = await sb.from('contact_lists').select('*');
-  const items = campaigns || [];
-  const contactLists = lists || [];
+  const [campaignRes, listRes, mediaRes, brandRes] = await Promise.all([
+    sb.from('email_campaigns').select('*').order('created_at', { ascending: false }),
+    sb.from('contact_lists').select('*'),
+    sb.from('media_contacts').select('*').order('outlet'),
+    sb.from('restaurants').select('*').order('name'),
+  ]);
+  const items = campaignRes.data || [];
+  const contactLists = listRes.data || [];
+  const mediaContacts = mediaRes.data || [];
+  const brands = brandRes.data || [];
+  window._contactLists = contactLists;
+  window._mediaContacts = mediaContacts;
+  window._brands = brands;
 
-  function rowHTML(e) {
+  const mediaWithEmail = mediaContacts.filter(m => m.email);
+
+  function campaignRowHTML(e) {
+    let targetLabel = e.recipient_list || '—';
+    if (e.recipient_list === '__media__') targetLabel = 'Media Contacts';
+    else if (e.recipient_list?.startsWith('__brand__')) {
+      const brandName = e.recipient_list.replace('__brand__:', '').replace('__brand__', '');
+      targetLabel = brandName ? brandName + ' Subscribers' : 'All Brands';
+    }
     return `<tr>
       <td>${e.name}</td>
       <td>${e.campaign_type || '—'}</td>
       <td>${badgeHTML(e.channel || 'email', e.channel || 'email')}</td>
       <td>${badgeHTML(e.status)}</td>
       <td>${formatDate(e.send_date)}</td>
+      <td>${targetLabel}</td>
       <td>${e.recipient_count || '—'}</td>
       <td>${e.sent_count || 0}</td>
       <td>${e.open_count || 0}</td>
@@ -2395,9 +2415,21 @@ async function renderEmailSms(container) {
     </tr>`;
   }
 
-  container.innerHTML = `
-    <h1 class="page-title">Email & SMS</h1>
-    <p class="page-subtitle">Manage email and SMS campaigns</p>
+  function listRowHTML(l) {
+    return `<tr>
+      <td>${l.name}</td>
+      <td>${badgeHTML(l.list_type || 'general', l.list_type || 'general')}</td>
+      <td>${l.description || '—'}</td>
+      <td><strong>${(l.subscriber_count || 0).toLocaleString()}</strong></td>
+      <td>${formatDate(l.created_at)}</td>
+      <td class="table-actions">
+        <button class="btn-icon btn-ghost" onclick="editContactList('${l.id}')"><i data-lucide="edit-2"></i></button>
+        <button class="btn-icon btn-ghost" onclick="deleteContactList('${l.id}')"><i data-lucide="trash-2"></i></button>
+      </td>
+    </tr>`;
+  }
+
+  const campaignsContent = `
     <div class="table-toolbar">
       <div class="search-filter"><i data-lucide="search"></i><input type="text" placeholder="Filter campaigns..." id="email-filter"></div>
       <div style="margin-left:auto;display:flex;gap:8px">
@@ -2413,29 +2445,99 @@ async function renderEmailSms(container) {
           <th data-key="channel">Channel</th>
           <th data-key="status">Status</th>
           <th data-key="send_date">Send Date</th>
+          <th>Target</th>
           <th data-key="recipient_count">Recipients</th>
           <th data-key="sent_count">Sent</th>
           <th data-key="open_count">Opens</th>
           <th data-key="click_count">Clicks</th>
           <th>Actions</th>
         </tr></thead>
-        <tbody id="email-tbody">${items.map(rowHTML).join('')}</tbody>
+        <tbody id="email-tbody">${items.map(campaignRowHTML).join('')}</tbody>
       </table>
+    </div>`;
+
+  const audiencesContent = `
+    <div class="audience-overview" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:16px;margin-bottom:24px">
+      <div class="stat-card">
+        <div class="stat-value">${contactLists.reduce((s,l) => s + (l.subscriber_count || 0), 0).toLocaleString()}</div>
+        <div class="stat-label">Total Subscribers</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value">${contactLists.length}</div>
+        <div class="stat-label">Contact Lists</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value">${mediaWithEmail.length}</div>
+        <div class="stat-label">Media Contacts (with email)</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value">${brands.length}</div>
+        <div class="stat-label">Brands</div>
+      </div>
+    </div>
+    <div style="display:flex;gap:24px;flex-wrap:wrap">
+      <div style="flex:1;min-width:320px">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+          <h3 style="margin:0">Contact Lists</h3>
+          ${canEdit() ? '<button class="btn btn-primary btn-sm" id="new-list-btn"><i data-lucide="plus"></i> New List</button>' : ''}
+        </div>
+        <div class="table-wrapper">
+          <table>
+            <thead><tr><th>Name</th><th>Type</th><th>Description</th><th>Subscribers</th><th>Created</th><th>Actions</th></tr></thead>
+            <tbody id="list-tbody">${contactLists.map(listRowHTML).join('')}</tbody>
+          </table>
+        </div>
+      </div>
+      <div style="flex:0 0 340px">
+        <h3 style="margin-bottom:12px">Media Contacts</h3>
+        <div style="background:var(--bg-secondary);border-radius:12px;padding:16px;max-height:380px;overflow-y:auto">
+          <p style="font-size:13px;color:var(--text-secondary);margin:0 0 12px">These ${mediaWithEmail.length} media contacts with email are available as a send target when creating campaigns.</p>
+          ${mediaWithEmail.map(m => `
+            <div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--border-color)">
+              <i data-lucide="newspaper" style="width:14px;height:14px;color:var(--text-secondary)"></i>
+              <div style="flex:1;min-width:0">
+                <div style="font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${m.name}</div>
+                <div style="font-size:11px;color:var(--text-secondary)">${m.outlet} · ${m.beat || 'general'}</div>
+              </div>
+            </div>`).join('')}
+        </div>
+      </div>
+    </div>`;
+
+  container.innerHTML = `
+    <h1 class="page-title">Email & SMS</h1>
+    <p class="page-subtitle">Create campaigns and manage your audience lists</p>
+    <div class="tab-bar" style="margin-bottom:20px">
+      <button class="tab-btn ${emailSmsTab === 'campaigns' ? 'active' : ''}" data-tab="campaigns"><i data-lucide="send" style="width:14px;height:14px"></i> Campaigns</button>
+      <button class="tab-btn ${emailSmsTab === 'audiences' ? 'active' : ''}" data-tab="audiences"><i data-lucide="users" style="width:14px;height:14px"></i> Audience Lists</button>
+    </div>
+    <div id="email-tab-content">
+      ${emailSmsTab === 'campaigns' ? campaignsContent : audiencesContent}
     </div>
   `;
   lucide.createIcons({ nameAttr: 'data-lucide' });
 
-  $('#email-filter')?.addEventListener('input', (e) => {
-    const q = e.target.value.toLowerCase();
-    $$('#email-tbody tr').forEach(tr => tr.style.display = tr.textContent.toLowerCase().includes(q) ? '' : 'none');
+  // Tab switching
+  $$('.tab-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      emailSmsTab = btn.dataset.tab;
+      renderEmailSms(container);
+    });
   });
-  $('#email-export').onclick = () => csvExport(items, 'email_sms_campaigns');
-  $('#new-email-btn').onclick = () => editEmailCampaign(null);
 
-  // Store contact lists for modal
-  window._contactLists = contactLists;
+  if (emailSmsTab === 'campaigns') {
+    $('#email-filter')?.addEventListener('input', (e) => {
+      const q = e.target.value.toLowerCase();
+      $$('#email-tbody tr').forEach(tr => tr.style.display = tr.textContent.toLowerCase().includes(q) ? '' : 'none');
+    });
+    $('#email-export')?.addEventListener('click', () => csvExport(items, 'email_sms_campaigns'));
+    if ($('#new-email-btn')) $('#new-email-btn').onclick = () => editEmailCampaign(null);
+  } else {
+    if ($('#new-list-btn')) $('#new-list-btn').onclick = () => editContactList(null);
+  }
 }
 
+// --- Edit / New Campaign with Audience Targeting ---
 window.editEmailCampaign = async function(id) {
   let e = {};
   if (id) {
@@ -2443,9 +2545,19 @@ window.editEmailCampaign = async function(id) {
     e = data || {};
   }
   const contactLists = window._contactLists || [];
+  const mediaContacts = (window._mediaContacts || []).filter(m => m.email);
+  const brands = window._brands || [];
+  const savedTarget = e.recipient_list || '';
+  // Parse saved media picks from tags or notes if media target
+  let savedMediaIds = [];
+  try { if (e.target_media_ids) savedMediaIds = JSON.parse(e.target_media_ids); } catch {}
+
+  // Outlet types for media filter
+  const outletTypes = [...new Set(mediaContacts.map(m => m.outlet_type).filter(Boolean))].sort();
+  const beats = [...new Set(mediaContacts.map(m => m.beat).filter(Boolean))].sort();
 
   openModal(id ? 'Edit Campaign' : 'New Campaign', `
-    <div class="form-group"><label class="form-label">Name</label><input class="form-input" id="ec-name" value="${e.name || ''}"></div>
+    <div class="form-group"><label class="form-label">Campaign Name</label><input class="form-input" id="ec-name" value="${e.name || ''}"></div>
     <div class="form-row">
       <div class="form-group"><label class="form-label">Channel</label>
         <select class="form-select" id="ec-channel">
@@ -2453,8 +2565,77 @@ window.editEmailCampaign = async function(id) {
           <option value="sms" ${e.channel === 'sms' ? 'selected' : ''}>SMS</option>
         </select>
       </div>
-      <div class="form-group"><label class="form-label">Campaign Type</label><input class="form-input" id="ec-type" value="${e.campaign_type || ''}"></div>
+      <div class="form-group"><label class="form-label">Campaign Type</label>
+        <select class="form-select" id="ec-type">
+          ${['newsletter','promotion','announcement','event','re-engagement','welcome','seasonal'].map(t => `<option value="${t}" ${e.campaign_type === t ? 'selected' : ''}>${t.charAt(0).toUpperCase() + t.slice(1)}</option>`).join('')}
+        </select>
+      </div>
     </div>
+
+    <div class="targeting-section" style="background:var(--bg-secondary);border-radius:12px;padding:16px;margin:16px 0">
+      <label class="form-label" style="font-size:14px;font-weight:600;margin-bottom:12px;display:flex;align-items:center;gap:6px">
+        <i data-lucide="target" style="width:16px;height:16px"></i> Audience Targeting
+      </label>
+      <div class="form-group" style="margin-bottom:12px">
+        <label class="form-label" style="font-size:12px">Send To</label>
+        <select class="form-select" id="ec-target-type">
+          <option value="list" ${savedTarget !== '__media__' && !savedTarget.startsWith('__brand__') ? 'selected' : ''}>Contact List</option>
+          <option value="media" ${savedTarget === '__media__' ? 'selected' : ''}>Media Contacts (Press Outreach)</option>
+          <option value="brand" ${savedTarget.startsWith('__brand__') ? 'selected' : ''}>Brand / Location Subscribers</option>
+        </select>
+      </div>
+
+      <!-- Contact List target -->
+      <div id="target-list-panel" style="display:none">
+        <select class="form-select" id="ec-list">
+          <option value="">Select a contact list...</option>
+          ${contactLists.map(l => `<option value="${l.name}" ${savedTarget === l.name ? 'selected' : ''}>${l.name} (${(l.subscriber_count || 0).toLocaleString()} subscribers)</option>`).join('')}
+        </select>
+      </div>
+
+      <!-- Media Contacts target -->
+      <div id="target-media-panel" style="display:none">
+        <div class="form-row" style="margin-bottom:8px">
+          <div class="form-group" style="margin-bottom:0">
+            <label class="form-label" style="font-size:11px">Filter by Type</label>
+            <select class="form-select" id="ec-media-type" style="font-size:12px">
+              <option value="">All Types</option>
+              ${outletTypes.map(t => `<option value="${t}">${t.charAt(0).toUpperCase() + t.slice(1)}</option>`).join('')}
+            </select>
+          </div>
+          <div class="form-group" style="margin-bottom:0">
+            <label class="form-label" style="font-size:11px">Filter by Beat</label>
+            <select class="form-select" id="ec-media-beat" style="font-size:12px">
+              <option value="">All Beats</option>
+              ${beats.map(b => `<option value="${b}">${b.charAt(0).toUpperCase() + b.slice(1)}</option>`).join('')}
+            </select>
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+          <label style="font-size:12px;display:flex;align-items:center;gap:4px;cursor:pointer">
+            <input type="checkbox" id="ec-media-select-all"> Select All
+          </label>
+          <span id="ec-media-count" style="font-size:12px;color:var(--text-secondary);margin-left:auto"></span>
+        </div>
+        <div id="ec-media-list" style="max-height:200px;overflow-y:auto;border:1px solid var(--border-color);border-radius:8px;padding:4px">
+        </div>
+      </div>
+
+      <!-- Brand target -->
+      <div id="target-brand-panel" style="display:none">
+        <select class="form-select" id="ec-brand">
+          <option value="">All Brands</option>
+          ${brands.filter(b => b.status === 'active').map(b => `<option value="${b.name}">${b.name}</option>`).join('')}
+        </select>
+        <p style="font-size:11px;color:var(--text-secondary);margin:6px 0 0">Sends to all subscribers associated with the selected brand. Leave blank for all brands.</p>
+      </div>
+
+      <div id="ec-audience-summary" style="margin-top:10px;padding:8px 12px;background:var(--bg-primary);border-radius:8px;font-size:13px;display:flex;align-items:center;gap:6px">
+        <i data-lucide="users" style="width:14px;height:14px;color:var(--accent)"></i>
+        <span id="ec-audience-count">Select a target audience above</span>
+      </div>
+    </div>
+
     <div class="form-group"><label class="form-label">Subject</label><input class="form-input" id="ec-subject" value="${e.subject || ''}"></div>
     <div class="form-group"><label class="form-label">Preview Text</label><input class="form-input" id="ec-preview" value="${e.preview_text || ''}"></div>
     <div class="form-group"><label class="form-label">Body</label><textarea class="form-textarea" id="ec-body" rows="5">${e.body_html || ''}</textarea>
@@ -2470,10 +2651,9 @@ window.editEmailCampaign = async function(id) {
           ${['draft','scheduled','sent'].map(s => `<option value="${s}" ${e.status === s ? 'selected' : ''}>${s}</option>`).join('')}
         </select>
       </div>
-      <div class="form-group"><label class="form-label">Recipient List</label>
-        <select class="form-select" id="ec-list">
-          <option value="">Select list...</option>
-          ${contactLists.map(l => `<option value="${l.name}" ${e.recipient_list === l.name ? 'selected' : ''}>${l.name} (${l.subscriber_count})</option>`).join('')}
+      <div class="form-group"><label class="form-label">Template</label>
+        <select class="form-select" id="ec-template">
+          ${['','newsletter','promo','announcement','press-release','welcome','re-engagement'].map(t => `<option value="${t}" ${e.template === t ? 'selected' : ''}>${t ? t.charAt(0).toUpperCase() + t.slice(1).replace('-',' ') : 'None'}</option>`).join('')}
         </select>
       </div>
     </div>
@@ -2481,10 +2661,92 @@ window.editEmailCampaign = async function(id) {
       <div class="form-group"><label class="form-label">Send Date</label><input class="form-input" type="date" id="ec-date" value="${e.send_date || ''}"></div>
       <div class="form-group"><label class="form-label">Send Time</label><input class="form-input" type="time" id="ec-time" value="${e.send_time || ''}"></div>
     </div>
-    <div class="form-group"><label class="form-label">Template</label><input class="form-input" id="ec-template" value="${e.template || ''}"></div>
     <div class="form-group"><label class="form-label">Tags (comma-separated)</label><input class="form-input" id="ec-tags" value="${parseJSON(e.tags).join(', ')}"></div>
-    <div class="form-group"><label class="form-label">Notes</label><textarea class="form-textarea" id="ec-notes">${e.notes || ''}</textarea></div>
+    <div class="form-group"><label class="form-label">Notes</label><textarea class="form-textarea" id="ec-notes" rows="2">${e.notes || ''}</textarea></div>
   `, `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button><button class="btn btn-primary" id="save-ec-btn">Save</button>`);
+
+  // --- Targeting panel logic ---
+  const targetType = $('#ec-target-type');
+  const listPanel = $('#target-list-panel');
+  const mediaPanel = $('#target-media-panel');
+  const brandPanel = $('#target-brand-panel');
+
+  function showTargetPanel() {
+    const v = targetType.value;
+    listPanel.style.display = v === 'list' ? '' : 'none';
+    mediaPanel.style.display = v === 'media' ? '' : 'none';
+    brandPanel.style.display = v === 'brand' ? '' : 'none';
+    updateAudienceSummary();
+    if (v === 'media') renderMediaCheckboxes();
+  }
+
+  function renderMediaCheckboxes() {
+    const typeFilter = $('#ec-media-type').value;
+    const beatFilter = $('#ec-media-beat').value;
+    let filtered = mediaContacts;
+    if (typeFilter) filtered = filtered.filter(m => m.outlet_type === typeFilter);
+    if (beatFilter) filtered = filtered.filter(m => m.beat === beatFilter);
+    const container = $('#ec-media-list');
+    container.innerHTML = filtered.map(m => `
+      <label style="display:flex;align-items:center;gap:8px;padding:6px 8px;cursor:pointer;border-radius:6px;font-size:12px" class="media-check-row">
+        <input type="checkbox" class="media-cb" value="${m.id}" ${savedMediaIds.includes(m.id) ? 'checked' : ''}>
+        <div style="flex:1;min-width:0">
+          <span style="font-weight:500">${m.name}</span>
+          <span style="color:var(--text-secondary)"> · ${m.outlet}</span>
+        </div>
+        <span style="color:var(--text-secondary);font-size:11px">${m.beat || ''}</span>
+      </label>
+    `).join('');
+    // hover effect
+    $$('.media-check-row').forEach(row => {
+      row.addEventListener('mouseenter', () => row.style.background = 'var(--bg-primary)');
+      row.addEventListener('mouseleave', () => row.style.background = '');
+    });
+    // checkbox change → update summary
+    $$('.media-cb').forEach(cb => cb.addEventListener('change', updateAudienceSummary));
+    updateMediaCount(filtered.length);
+    updateAudienceSummary();
+  }
+
+  function updateMediaCount(total) {
+    const checked = $$('.media-cb:checked').length;
+    $('#ec-media-count').textContent = `${checked} of ${total} selected`;
+  }
+
+  function updateAudienceSummary() {
+    const v = targetType.value;
+    const el = $('#ec-audience-count');
+    if (v === 'list') {
+      const sel = $('#ec-list');
+      const opt = sel?.options[sel.selectedIndex];
+      if (sel.value) {
+        const listObj = (window._contactLists || []).find(l => l.name === sel.value);
+        el.textContent = `${(listObj?.subscriber_count || 0).toLocaleString()} recipients from "${sel.value}"`;
+      } else {
+        el.textContent = 'Select a contact list above';
+      }
+    } else if (v === 'media') {
+      const checked = $$('.media-cb:checked').length;
+      el.textContent = checked > 0 ? `${checked} media contact${checked > 1 ? 's' : ''} selected for outreach` : 'Select media contacts above';
+      const total = $$('.media-cb').length;
+      updateMediaCount(total);
+    } else if (v === 'brand') {
+      const brand = $('#ec-brand').value;
+      el.textContent = brand ? `All subscribers for ${brand}` : 'All subscribers across all brands';
+    }
+  }
+
+  targetType.addEventListener('change', showTargetPanel);
+  $('#ec-list')?.addEventListener('change', updateAudienceSummary);
+  $('#ec-brand')?.addEventListener('change', updateAudienceSummary);
+  $('#ec-media-type')?.addEventListener('change', renderMediaCheckboxes);
+  $('#ec-media-beat')?.addEventListener('change', renderMediaCheckboxes);
+  $('#ec-media-select-all')?.addEventListener('change', (ev) => {
+    $$('.media-cb').forEach(cb => { cb.checked = ev.target.checked; });
+    updateAudienceSummary();
+  });
+
+  showTargetPanel();
 
   // AI Generate for email/SMS campaigns
   $('#ai-gen-email').onclick = () => {
@@ -2523,11 +2785,30 @@ Only output the JSON, nothing else.`, 400
       $('#ai-gen-email-inline').style.display = 'none';
     }
   };
-  $('#ai-gen-email-prompt').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('#ai-gen-email-go').click(); });
+  $('#ai-gen-email-prompt').addEventListener('keydown', (ev) => { if (ev.key === 'Enter') $('#ai-gen-email-go').click(); });
 
+  // Save campaign
   $('#save-ec-btn').onclick = async () => {
-    const list = $('#ec-list').value;
-    const listObj = (window._contactLists || []).find(l => l.name === list);
+    const tType = targetType.value;
+    let recipientList = '';
+    let recipientCount = null;
+    let targetMediaIds = null;
+
+    if (tType === 'list') {
+      recipientList = $('#ec-list').value;
+      const listObj = (window._contactLists || []).find(l => l.name === recipientList);
+      recipientCount = listObj?.subscriber_count || null;
+    } else if (tType === 'media') {
+      recipientList = '__media__';
+      const ids = [...$$('.media-cb:checked')].map(cb => parseInt(cb.value));
+      targetMediaIds = JSON.stringify(ids);
+      recipientCount = ids.length;
+    } else if (tType === 'brand') {
+      recipientList = '__brand__';
+      const brand = $('#ec-brand').value;
+      if (brand) recipientList = '__brand__:' + brand;
+    }
+
     const obj = {
       name: $('#ec-name').value,
       channel: $('#ec-channel').value,
@@ -2536,8 +2817,8 @@ Only output the JSON, nothing else.`, 400
       preview_text: $('#ec-preview').value,
       body_html: $('#ec-body').value,
       status: $('#ec-status').value,
-      recipient_list: list,
-      recipient_count: listObj?.subscriber_count || null,
+      recipient_list: recipientList,
+      recipient_count: recipientCount,
       send_date: $('#ec-date').value || null,
       send_time: $('#ec-time').value || null,
       template: $('#ec-template').value,
@@ -2557,6 +2838,55 @@ Only output the JSON, nothing else.`, 400
     toast(id ? 'Campaign updated' : 'Campaign created', 'success');
     navigate('email-sms');
   };
+};
+
+// --- Contact List CRUD ---
+window.editContactList = async function(id) {
+  let l = {};
+  if (id) {
+    const { data } = await sb.from('contact_lists').select('*').eq('id', id).single();
+    l = data || {};
+  }
+  openModal(id ? 'Edit Contact List' : 'New Contact List', `
+    <div class="form-group"><label class="form-label">List Name</label><input class="form-input" id="cl-name" value="${l.name || ''}"></div>
+    <div class="form-group"><label class="form-label">Description</label><input class="form-input" id="cl-desc" value="${l.description || ''}"></div>
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">Type</label>
+        <select class="form-select" id="cl-type">
+          ${['master','segment','brand','sms','dynamic','custom'].map(t => `<option value="${t}" ${l.list_type === t ? 'selected' : ''}>${t.charAt(0).toUpperCase() + t.slice(1)}</option>`).join('')}
+        </select>
+      </div>
+      <div class="form-group"><label class="form-label">Subscriber Count</label><input class="form-input" type="number" id="cl-count" value="${l.subscriber_count || 0}"></div>
+    </div>
+  `, `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button><button class="btn btn-primary" id="save-cl-btn">Save</button>`);
+
+  $('#save-cl-btn').onclick = async () => {
+    const obj = {
+      name: $('#cl-name').value,
+      description: $('#cl-desc').value,
+      list_type: $('#cl-type').value,
+      subscriber_count: parseInt($('#cl-count').value) || 0,
+    };
+    if (!obj.name) return toast('Name is required', 'error');
+    if (id) {
+      await sb.from('contact_lists').update(obj).eq('id', id);
+      toast('List updated', 'success');
+    } else {
+      await sb.from('contact_lists').insert(obj);
+      toast('List created', 'success');
+    }
+    closeModal();
+    navigate('email-sms');
+  };
+};
+
+window.deleteContactList = function(id) {
+  openConfirm('Delete Contact List', 'Are you sure? This cannot be undone.', async () => {
+    await sb.from('contact_lists').delete().eq('id', id);
+    toast('List deleted', 'success');
+    emailSmsTab = 'audiences';
+    navigate('email-sms');
+  });
 };
 
 window.deleteEmailCampaign = function(id) {
