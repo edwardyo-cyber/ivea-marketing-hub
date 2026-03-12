@@ -854,19 +854,54 @@ async function renderLocSubPage(container) {
   if (pages[locationSubPage]) await pages[locationSubPage](container, ctx);
 }
 
+// === LOCATION CRUD HELPER FUNCTIONS ===
+
+// Helper: get all posts scoped to this brand
+async function getLocPosts(ctx) {
+  const brandName = ctx.restaurant.name;
+  const { data: posts } = await sb.from('content_posts').select('*').order('created_at', { ascending: false });
+  return (posts || []).filter(p => {
+    const tags = parseJSON(p.tags);
+    return tags.some(t => t.toLowerCase() === brandName.toLowerCase()) || tags.some(t => t.toLowerCase().startsWith('brand:') && t.slice(6).toLowerCase() === brandName.toLowerCase());
+  });
+}
+
+// Helper: get all campaigns scoped to this brand
+async function getLocCampaigns(ctx) {
+  const brandName = ctx.restaurant.name;
+  const { data: campaigns } = await sb.from('campaigns').select('*').order('created_at', { ascending: false });
+  return (campaigns || []).filter(c => {
+    const brands = parseJSON(c.brands);
+    const tags = parseJSON(c.tags);
+    return brands.some(b => b.toLowerCase() === brandName.toLowerCase()) || tags.some(t => t.toLowerCase() === brandName.toLowerCase());
+  });
+}
+
+// Helper: get all reviews scoped to this brand
+async function getLocReviews(ctx) {
+  const brandName = ctx.restaurant.name;
+  const { data: reviews } = await sb.from('reviews').select('*').order('created_at', { ascending: false });
+  return (reviews || []).filter(r => (r.restaurant_name || '').toLowerCase() === brandName.toLowerCase());
+}
+
+// Helper: get all social accounts scoped to this brand
+async function getLocSocialAccounts(ctx) {
+  const brandName = ctx.restaurant.name;
+  const { data: accounts } = await sb.from('social_accounts').select('*').order('created_at', { ascending: false });
+  return (accounts || []).filter(a => {
+    const tags = parseJSON(a.tags || '[]');
+    const notes = (a.notes || '').toLowerCase();
+    const bio = (a.bio || '').toLowerCase();
+    return tags.some(t => t.toLowerCase() === brandName.toLowerCase()) || notes.includes(brandName.toLowerCase()) || bio.includes(brandName.toLowerCase());
+  });
+}
+
 // --- Location Dashboard ---
 async function renderLocDashboard(container, ctx) {
-  const lk = locKey();
   const locName = ctx.location.name || 'This Location';
-
-  // Try to load location-specific data
-  const { data: posts } = await sb.from('content_posts').select('*').eq('restaurant_id', ctx.restaurantId);
-  const { data: campaigns } = await sb.from('campaigns').select('*').eq('restaurant_id', ctx.restaurantId);
-  const { data: reviews } = await sb.from('reviews').select('*').eq('restaurant_id', ctx.restaurantId);
-  const locPosts = (posts || []).filter(p => !p.location_key || p.location_key === lk);
-  const locCampaigns = (campaigns || []).filter(c => !c.location_key || c.location_key === lk);
-  const locReviews = (reviews || []).filter(r => !r.location_key || r.location_key === lk);
-
+  const locPosts = await getLocPosts(ctx);
+  const locCampaigns = await getLocCampaigns(ctx);
+  const locReviews = await getLocReviews(ctx);
   const avgRating = locReviews.length > 0 ? (locReviews.reduce((s, r) => s + (r.rating || 0), 0) / locReviews.length).toFixed(1) : '—';
 
   container.innerHTML = `
@@ -881,9 +916,12 @@ async function renderLocDashboard(container, ctx) {
     <div class="card" style="padding:20px">
       <h3 style="margin:0 0 12px 0;font-size:15px">Quick Actions</h3>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
-        <button class="btn btn-primary btn-sm" onclick="locationSubPage='loc-content';navigate('restaurants')"><i data-lucide="plus" style="width:14px;height:14px"></i> Create Post</button>
-        <button class="btn btn-secondary btn-sm" onclick="locationSubPage='loc-campaigns';navigate('restaurants')"><i data-lucide="megaphone" style="width:14px;height:14px"></i> New Campaign</button>
-        <button class="btn btn-secondary btn-sm" onclick="locationSubPage='loc-reviews';navigate('restaurants')"><i data-lucide="message-square" style="width:14px;height:14px"></i> View Reviews</button>
+        ${canEdit() ? `
+        <button class="btn btn-primary btn-sm" id="loc-dash-new-post"><i data-lucide="plus" style="width:14px;height:14px"></i> Create Post</button>
+        <button class="btn btn-secondary btn-sm" id="loc-dash-new-camp"><i data-lucide="megaphone" style="width:14px;height:14px"></i> New Campaign</button>
+        <button class="btn btn-secondary btn-sm" id="loc-dash-new-review"><i data-lucide="message-square" style="width:14px;height:14px"></i> Add Review</button>
+        ` : ''}
+        <button class="btn btn-secondary btn-sm" onclick="locationSubPage='loc-reviews';renderLocSubPage($('#loc-page-content'));$$('.loc-nav-item').forEach(n=>{n.classList.remove('active');if(n.dataset.page==='loc-reviews')n.classList.add('active')})"><i data-lucide="star" style="width:14px;height:14px"></i> View Reviews</button>
       </div>
     </div>
     ${locReviews.length > 0 ? `
@@ -895,114 +933,133 @@ async function renderLocDashboard(container, ctx) {
             <span style="font-weight:500;font-size:13px">${r.reviewer_name || 'Anonymous'}</span>
             <span style="color:var(--warning);font-size:13px">${'★'.repeat(r.rating || 0)}${'☆'.repeat(5 - (r.rating || 0))}</span>
           </div>
-          <p style="font-size:12px;color:var(--text-secondary);margin:4px 0 0 0">${(r.content || '').substring(0, 120)}${(r.content || '').length > 120 ? '...' : ''}</p>
+          <p style="font-size:12px;color:var(--text-secondary);margin:4px 0 0 0">${(r.review_text || '').substring(0, 120)}${(r.review_text || '').length > 120 ? '...' : ''}</p>
         </div>
       `).join('')}
     </div>` : ''}
   `;
   lucide.createIcons({ nameAttr: 'data-lucide' });
+  $('#loc-dash-new-post')?.addEventListener('click', () => openLocPostEditor(ctx));
+  $('#loc-dash-new-camp')?.addEventListener('click', () => openLocCampaignEditor(ctx));
+  $('#loc-dash-new-review')?.addEventListener('click', () => openLocReviewEditor(ctx));
 }
 
 // --- Location Content Hub ---
 async function renderLocContent(container, ctx) {
-  const lk = locKey();
-  const { data: posts } = await sb.from('content_posts').select('*').eq('restaurant_id', ctx.restaurantId).order('created_at', { ascending: false });
-  const locPosts = (posts || []).filter(p => !p.location_key || p.location_key === lk);
+  const locPosts = await getLocPosts(ctx);
 
   container.innerHTML = `
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
       <div><h2 style="margin:0;font-size:20px">Content Hub</h2><p style="color:var(--text-muted);font-size:13px;margin:4px 0 0 0">${ctx.location.name} — ${locPosts.length} post${locPosts.length !== 1 ? 's' : ''}</p></div>
+      ${canEdit() ? '<button class="btn btn-primary btn-sm" id="loc-new-post-btn"><i data-lucide="plus" style="width:14px;height:14px"></i> New Post</button>' : ''}
     </div>
-    ${locPosts.length === 0 ? `<div class="empty-state" style="padding:40px;text-align:center"><i data-lucide="file-text" style="width:40px;height:40px;color:var(--text-muted)"></i><p style="margin-top:8px;color:var(--text-muted)">No posts yet for this location</p><p style="font-size:12px;color:var(--text-muted)">Posts assigned to this brand will appear here. Create posts from the main Content Hub and assign them to ${ctx.restaurant.name}.</p></div>` : `
+    ${locPosts.length === 0 ? `<div class="empty-state" style="padding:40px;text-align:center"><i data-lucide="file-text" style="width:40px;height:40px;color:var(--text-muted)"></i><p style="margin-top:8px;color:var(--text-muted)">No posts yet for ${ctx.restaurant.name}</p><p style="font-size:12px;color:var(--text-muted)">Click "New Post" to create content scoped to this brand.</p></div>` : `
     <div class="table-wrapper"><table>
-      <thead><tr><th>Title</th><th>Platform</th><th>Status</th><th>Date</th></tr></thead>
+      <thead><tr><th>Title</th><th>Platform</th><th>Status</th><th>Date</th><th>Actions</th></tr></thead>
       <tbody>${locPosts.map(p => `<tr>
         <td>${p.title || 'Untitled'}</td>
-        <td>${badgeHTML(p.platform || '—')}</td>
+        <td>${parseJSON(p.platforms).map(pl => badgeHTML(pl)).join(' ') || '—'}</td>
         <td>${badgeHTML(p.status || 'draft')}</td>
-        <td>${formatDate(p.created_at)}</td>
+        <td>${formatDate(p.scheduled_date || p.created_at)}</td>
+        <td style="white-space:nowrap">
+          ${canEdit() ? `<button class="btn btn-sm btn-secondary" onclick="editPost('${p.id}')"><i data-lucide="pencil" style="width:12px;height:12px"></i></button>
+          <button class="btn btn-sm" style="color:var(--danger)" onclick="deletePost('${p.id}')"><i data-lucide="trash-2" style="width:12px;height:12px"></i></button>` : ''}
+        </td>
       </tr>`).join('')}</tbody>
     </table></div>`}
   `;
   lucide.createIcons({ nameAttr: 'data-lucide' });
+  $('#loc-new-post-btn')?.addEventListener('click', () => openLocPostEditor(ctx));
 }
 
 // --- Location Calendar ---
 async function renderLocCalendar(container, ctx) {
-  const { data: posts } = await sb.from('content_posts').select('*').eq('restaurant_id', ctx.restaurantId).not('scheduled_date', 'is', null);
-  const lk = locKey();
-  const locPosts = (posts || []).filter(p => !p.location_key || p.location_key === lk);
+  const locPosts = await getLocPosts(ctx);
+  const scheduled = locPosts.filter(p => p.scheduled_date);
 
   const now = new Date();
   const month = now.toLocaleString('en-US', { month: 'long', year: 'numeric' });
   const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
   const firstDay = new Date(now.getFullYear(), now.getMonth(), 1).getDay();
 
-  // Build calendar grid
   let calCells = '';
   for (let i = 0; i < firstDay; i++) calCells += '<div class="cal-cell empty"></div>';
   for (let d = 1; d <= daysInMonth; d++) {
     const dateStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-    const dayPosts = locPosts.filter(p => p.scheduled_date && p.scheduled_date.startsWith(dateStr));
+    const dayPosts = scheduled.filter(p => p.scheduled_date && p.scheduled_date.startsWith(dateStr));
     const isToday = d === now.getDate();
     calCells += `<div class="cal-cell ${isToday ? 'today' : ''}">
       <div class="cal-day">${d}</div>
-      ${dayPosts.map(p => `<div class="cal-event" title="${p.title || 'Post'}">${(p.title || 'Post').substring(0, 15)}</div>`).join('')}
+      ${dayPosts.map(p => `<div class="cal-event" title="${p.title || 'Post'}" onclick="editPost('${p.id}')" style="cursor:pointer">${(p.title || 'Post').substring(0, 15)}</div>`).join('')}
     </div>`;
   }
 
   container.innerHTML = `
-    <h2 style="margin:0 0 4px 0;font-size:20px">Calendar</h2>
-    <p style="color:var(--text-muted);font-size:13px;margin:0 0 16px 0">${ctx.location.name} — ${month}</p>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+      <div>
+        <h2 style="margin:0 0 4px 0;font-size:20px">Calendar</h2>
+        <p style="color:var(--text-muted);font-size:13px;margin:0">${ctx.location.name} — ${month}</p>
+      </div>
+      ${canEdit() ? '<button class="btn btn-primary btn-sm" id="loc-cal-new-post"><i data-lucide="plus" style="width:14px;height:14px"></i> Schedule Post</button>' : ''}
+    </div>
     <div class="cal-grid">
       <div class="cal-header">Sun</div><div class="cal-header">Mon</div><div class="cal-header">Tue</div>
       <div class="cal-header">Wed</div><div class="cal-header">Thu</div><div class="cal-header">Fri</div><div class="cal-header">Sat</div>
       ${calCells}
     </div>
   `;
+  lucide.createIcons({ nameAttr: 'data-lucide' });
+  $('#loc-cal-new-post')?.addEventListener('click', () => openLocPostEditor(ctx));
 }
 
 // --- Location Campaigns ---
 async function renderLocCampaigns(container, ctx) {
-  const lk = locKey();
-  const { data: campaigns } = await sb.from('campaigns').select('*').eq('restaurant_id', ctx.restaurantId).order('created_at', { ascending: false });
-  const locCampaigns = (campaigns || []).filter(c => !c.location_key || c.location_key === lk);
+  const locCampaigns = await getLocCampaigns(ctx);
 
   container.innerHTML = `
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
       <div><h2 style="margin:0;font-size:20px">Campaigns</h2><p style="color:var(--text-muted);font-size:13px;margin:4px 0 0 0">${ctx.location.name} — ${locCampaigns.length} campaign${locCampaigns.length !== 1 ? 's' : ''}</p></div>
+      ${canEdit() ? '<button class="btn btn-primary btn-sm" id="loc-new-camp-btn"><i data-lucide="plus" style="width:14px;height:14px"></i> New Campaign</button>' : ''}
     </div>
-    ${locCampaigns.length === 0 ? `<div class="empty-state" style="padding:40px;text-align:center"><i data-lucide="megaphone" style="width:40px;height:40px;color:var(--text-muted)"></i><p style="margin-top:8px;color:var(--text-muted)">No campaigns yet for this location</p></div>` : `
+    ${locCampaigns.length === 0 ? `<div class="empty-state" style="padding:40px;text-align:center"><i data-lucide="megaphone" style="width:40px;height:40px;color:var(--text-muted)"></i><p style="margin-top:8px;color:var(--text-muted)">No campaigns yet for ${ctx.restaurant.name}</p><p style="font-size:12px;color:var(--text-muted)">Click "New Campaign" to create one scoped to this brand.</p></div>` : `
     <div class="table-wrapper"><table>
-      <thead><tr><th>Name</th><th>Type</th><th>Status</th><th>Budget</th><th>Start</th><th>End</th></tr></thead>
+      <thead><tr><th>Name</th><th>Type</th><th>Status</th><th>Budget</th><th>Start</th><th>End</th><th>Actions</th></tr></thead>
       <tbody>${locCampaigns.map(c => `<tr>
         <td>${c.name || 'Untitled'}</td>
-        <td>${badgeHTML(c.type || '—')}</td>
-        <td>${badgeHTML(c.status || 'draft')}</td>
-        <td>${c.budget ? '$' + Number(c.budget).toLocaleString() : '—'}</td>
+        <td>${badgeHTML(c.campaign_type || '—')}</td>
+        <td>${badgeHTML(c.status || 'planning')}</td>
+        <td>${c.budget ? (typeof c.budget === 'string' && c.budget.startsWith('$') ? c.budget : '$' + Number(c.budget).toLocaleString()) : '—'}</td>
         <td>${formatDate(c.start_date)}</td>
         <td>${formatDate(c.end_date)}</td>
+        <td style="white-space:nowrap">
+          ${canEdit() ? `<button class="btn btn-sm btn-secondary" onclick="editCampaign('${c.id}')"><i data-lucide="pencil" style="width:12px;height:12px"></i></button>
+          <button class="btn btn-sm" style="color:var(--danger)" onclick="deleteCampaign('${c.id}')"><i data-lucide="trash-2" style="width:12px;height:12px"></i></button>` : ''}
+        </td>
       </tr>`).join('')}</tbody>
     </table></div>`}
   `;
   lucide.createIcons({ nameAttr: 'data-lucide' });
+  $('#loc-new-camp-btn')?.addEventListener('click', () => openLocCampaignEditor(ctx));
 }
 
 // --- Location Reviews ---
 async function renderLocReviews(container, ctx) {
-  const lk = locKey();
-  const { data: reviews } = await sb.from('reviews').select('*').eq('restaurant_id', ctx.restaurantId).order('created_at', { ascending: false });
-  const locReviews = (reviews || []).filter(r => !r.location_key || r.location_key === lk);
+  const locReviews = await getLocReviews(ctx);
   const avgRating = locReviews.length > 0 ? (locReviews.reduce((s, r) => s + (r.rating || 0), 0) / locReviews.length).toFixed(1) : '—';
   const dist = [5,4,3,2,1].map(star => ({ star, count: locReviews.filter(r => r.rating === star).length }));
 
   container.innerHTML = `
-    <h2 style="margin:0 0 4px 0;font-size:20px">Reviews</h2>
-    <p style="color:var(--text-muted);font-size:13px;margin:0 0 16px 0">${ctx.location.name}</p>
-    <div style="display:flex;gap:24px;margin-bottom:20px">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+      <div>
+        <h2 style="margin:0 0 4px 0;font-size:20px">Reviews</h2>
+        <p style="color:var(--text-muted);font-size:13px;margin:0">${ctx.location.name}</p>
+      </div>
+      ${canEdit() ? '<button class="btn btn-primary btn-sm" id="loc-new-review-btn"><i data-lucide="plus" style="width:14px;height:14px"></i> Add Review</button>' : ''}
+    </div>
+    <div style="display:flex;gap:24px;margin-bottom:20px;flex-wrap:wrap">
       <div class="kpi-card" style="min-width:100px;text-align:center"><div class="kpi-label">Average</div><div class="kpi-value" style="color:var(--warning);font-size:32px">${avgRating}</div></div>
       <div class="kpi-card" style="min-width:100px;text-align:center"><div class="kpi-label">Total</div><div class="kpi-value">${locReviews.length}</div></div>
-      <div class="card" style="flex:1;padding:12px">
+      <div class="card" style="flex:1;padding:12px;min-width:200px">
         ${dist.map(d => `<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
           <span style="font-size:12px;width:16px">${d.star}★</span>
           <div style="flex:1;height:8px;background:var(--bg-hover);border-radius:4px;overflow:hidden">
@@ -1012,32 +1069,35 @@ async function renderLocReviews(container, ctx) {
         </div>`).join('')}
       </div>
     </div>
-    ${locReviews.length === 0 ? `<div class="empty-state" style="padding:40px;text-align:center"><i data-lucide="message-square" style="width:40px;height:40px;color:var(--text-muted)"></i><p style="margin-top:8px;color:var(--text-muted)">No reviews yet for this location</p></div>` : `
+    ${locReviews.length === 0 ? `<div class="empty-state" style="padding:40px;text-align:center"><i data-lucide="message-square" style="width:40px;height:40px;color:var(--text-muted)"></i><p style="margin-top:8px;color:var(--text-muted)">No reviews yet for ${ctx.restaurant.name}</p><p style="font-size:12px;color:var(--text-muted)">Click "Add Review" to manually add a review, or sync from Google.</p></div>` : `
     <div class="table-wrapper"><table>
-      <thead><tr><th>Reviewer</th><th>Rating</th><th>Platform</th><th>Content</th><th>Date</th></tr></thead>
+      <thead><tr><th>Reviewer</th><th>Rating</th><th>Platform</th><th>Content</th><th>Status</th><th>Actions</th></tr></thead>
       <tbody>${locReviews.map(r => `<tr>
         <td>${r.reviewer_name || 'Anonymous'}</td>
         <td style="color:var(--warning)">${'★'.repeat(r.rating || 0)}${'☆'.repeat(5 - (r.rating || 0))}</td>
         <td>${badgeHTML(r.platform || '—')}</td>
-        <td style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${r.content || '—'}</td>
-        <td>${formatDate(r.created_at)}</td>
+        <td style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${r.review_text || '—'}</td>
+        <td>${badgeHTML(r.status || 'pending')}</td>
+        <td style="white-space:nowrap">
+          ${canEdit() ? `<button class="btn btn-sm btn-primary" onclick="respondToReview('${r.id}')"><i data-lucide="reply" style="width:12px;height:12px"></i></button>` : ''}
+        </td>
       </tr>`).join('')}</tbody>
     </table></div>`}
   `;
   lucide.createIcons({ nameAttr: 'data-lucide' });
+  $('#loc-new-review-btn')?.addEventListener('click', () => openLocReviewEditor(ctx));
 }
 
 // --- Location Reports ---
 async function renderLocReports(container, ctx) {
-  const lk = locKey();
-  const { data: posts } = await sb.from('content_posts').select('*').eq('restaurant_id', ctx.restaurantId);
-  const { data: reviews } = await sb.from('reviews').select('*').eq('restaurant_id', ctx.restaurantId);
-  const locPosts = (posts || []).filter(p => !p.location_key || p.location_key === lk);
-  const locReviews = (reviews || []).filter(r => !r.location_key || r.location_key === lk);
+  const locPosts = await getLocPosts(ctx);
+  const locReviews = await getLocReviews(ctx);
 
   const published = locPosts.filter(p => p.status === 'published').length;
   const draft = locPosts.filter(p => p.status === 'draft').length;
   const scheduled = locPosts.filter(p => p.status === 'scheduled').length;
+  const review = locPosts.filter(p => p.status === 'review').length;
+  const approved = locPosts.filter(p => p.status === 'approved').length;
 
   container.innerHTML = `
     <h2 style="margin:0 0 4px 0;font-size:20px">Reports</h2>
@@ -1050,18 +1110,19 @@ async function renderLocReports(container, ctx) {
     </div>
     <div class="card" style="padding:20px">
       <h3 style="margin:0 0 12px 0;font-size:15px">Content Breakdown</h3>
-      <div style="display:flex;gap:16px">
-        <div style="flex:1">
+      <div style="display:flex;gap:16px;flex-wrap:wrap">
+        <div style="flex:1;min-width:200px">
           <div style="font-size:12px;color:var(--text-muted);margin-bottom:8px">Posts by Status</div>
-          ${[{label:'Published',count:published,color:'var(--success)'},{label:'Draft',count:draft,color:'var(--text-muted)'},{label:'Scheduled',count:scheduled,color:'var(--accent)'}].map(s => `
+          ${[{label:'Published',count:published,color:'var(--success)'},{label:'Draft',count:draft,color:'var(--text-muted)'},{label:'Scheduled',count:scheduled,color:'var(--accent)'},{label:'In Review',count:review,color:'var(--warning)'},{label:'Approved',count:approved,color:'var(--info)'}].filter(s => s.count > 0).map(s => `
             <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
               <div style="width:8px;height:8px;border-radius:50%;background:${s.color}"></div>
               <span style="font-size:13px;flex:1">${s.label}</span>
               <span style="font-size:13px;font-weight:600">${s.count}</span>
             </div>
           `).join('')}
+          ${locPosts.length === 0 ? '<p style="font-size:13px;color:var(--text-muted)">No posts yet</p>' : ''}
         </div>
-        <div style="flex:1">
+        <div style="flex:1;min-width:200px">
           <div style="font-size:12px;color:var(--text-muted);margin-bottom:8px">Review Platforms</div>
           ${locReviews.length === 0 ? '<p style="font-size:13px;color:var(--text-muted)">No reviews yet</p>' : (() => {
             const platforms = {};
@@ -1081,34 +1142,42 @@ async function renderLocReports(container, ctx) {
 
 // --- Location Social Accounts ---
 async function renderLocSocial(container, ctx) {
-  const { data: accounts } = await sb.from('social_accounts').select('*').eq('restaurant_id', ctx.restaurantId);
-  const items = accounts || [];
+  const items = await getLocSocialAccounts(ctx);
 
   container.innerHTML = `
-    <h2 style="margin:0 0 4px 0;font-size:20px">Social Accounts</h2>
-    <p style="color:var(--text-muted);font-size:13px;margin:0 0 16px 0">${ctx.location.name} — Connected accounts</p>
-    ${items.length === 0 ? `<div class="empty-state" style="padding:40px;text-align:center"><i data-lucide="share-2" style="width:40px;height:40px;color:var(--text-muted)"></i><p style="margin-top:8px;color:var(--text-muted)">No social accounts connected for this brand</p><p style="font-size:12px;color:var(--text-muted)">Connect accounts from the main Social Accounts page.</p></div>` : `
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+      <div>
+        <h2 style="margin:0 0 4px 0;font-size:20px">Social Accounts</h2>
+        <p style="color:var(--text-muted);font-size:13px;margin:0">${ctx.location.name} — Connected accounts</p>
+      </div>
+      ${canEdit() ? '<button class="btn btn-primary btn-sm" id="loc-new-social-btn"><i data-lucide="plus" style="width:14px;height:14px"></i> Connect Account</button>' : ''}
+    </div>
+    ${items.length === 0 ? `<div class="empty-state" style="padding:40px;text-align:center"><i data-lucide="share-2" style="width:40px;height:40px;color:var(--text-muted)"></i><p style="margin-top:8px;color:var(--text-muted)">No social accounts connected for ${ctx.restaurant.name}</p><p style="font-size:12px;color:var(--text-muted)">Click "Connect Account" to add a social account for this brand.</p></div>` : `
     <div class="table-wrapper"><table>
-      <thead><tr><th>Platform</th><th>Handle</th><th>Followers</th><th>Status</th></tr></thead>
+      <thead><tr><th>Platform</th><th>Handle</th><th>Followers</th><th>Status</th><th>Actions</th></tr></thead>
       <tbody>${items.map(a => `<tr>
         <td>${badgeHTML(a.platform || '—')}</td>
         <td>${a.handle || a.username || '—'}</td>
         <td>${a.followers ? Number(a.followers).toLocaleString() : '—'}</td>
         <td>${badgeHTML(a.status || 'active')}</td>
+        <td style="white-space:nowrap">
+          ${canEdit() ? `<button class="btn btn-sm btn-secondary" onclick="editSocialAccount('${a.id}')"><i data-lucide="pencil" style="width:12px;height:12px"></i></button>
+          <button class="btn btn-sm" style="color:var(--danger)" onclick="deleteSocialAccount('${a.id}')"><i data-lucide="trash-2" style="width:12px;height:12px"></i></button>` : ''}
+        </td>
       </tr>`).join('')}</tbody>
     </table></div>`}
   `;
   lucide.createIcons({ nameAttr: 'data-lucide' });
+  $('#loc-new-social-btn')?.addEventListener('click', () => openLocSocialEditor(ctx));
 }
 
 // --- Location Audit Log ---
 async function renderLocAudit(container, ctx) {
-  const { data: logs } = await sb.from('activity_log').select('*').order('created_at', { ascending: false }).limit(50);
-  // Filter for this restaurant
+  const { data: logs } = await sb.from('activity_log').select('*').order('created_at', { ascending: false }).limit(100);
+  const rName = (ctx.restaurant.name || '').toLowerCase();
+  const lName = (ctx.location.name || '').toLowerCase();
   const locLogs = (logs || []).filter(l => {
     const desc = (l.description || '').toLowerCase();
-    const rName = (ctx.restaurant.name || '').toLowerCase();
-    const lName = (ctx.location.name || '').toLowerCase();
     return desc.includes(rName) || desc.includes(lName);
   });
 
@@ -1128,6 +1197,282 @@ async function renderLocAudit(container, ctx) {
   `;
   lucide.createIcons({ nameAttr: 'data-lucide' });
 }
+
+// ============ LOCATION-SCOPED CRUD MODAL FUNCTIONS ============
+
+// Open post editor scoped to this location/brand
+function openLocPostEditor(ctx, id) {
+  // Reuse the global editPost, but pre-fill brand tag
+  if (id) {
+    window.editPost(id);
+    return;
+  }
+  const brandName = ctx.restaurant.name;
+  const allPlatforms = ['Instagram', 'Facebook', 'Twitter', 'TikTok', 'LinkedIn', 'YouTube', 'Pinterest'];
+  openModal('New Post — ' + brandName, `
+    <div class="form-group"><label class="form-label">Title</label><input class="form-input" id="post-title" value=""></div>
+    <div class="form-group"><label class="form-label">Body</label><textarea class="form-textarea" id="post-body" rows="4"></textarea>
+      <button class="btn btn-sm ai-gen-btn" id="ai-gen-loc-post" type="button"><i data-lucide="sparkles"></i> Generate with AI</button>
+      <div class="ai-gen-inline" id="ai-gen-loc-post-inline" style="display:none">
+        <input type="text" class="form-input" id="ai-gen-loc-post-prompt" placeholder="What should this post be about?">
+        <button class="btn btn-sm btn-primary" id="ai-gen-loc-post-go">Generate</button>
+      </div>
+    </div>
+    <div class="form-group"><label class="form-label">Platforms</label>
+      <div class="chip-select" id="post-platforms">${allPlatforms.map(p => `<div class="chip" data-value="${p}">${p}</div>`).join('')}</div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">Status</label>
+        <select class="form-select" id="post-status">
+          ${['draft','review','approved','scheduled','published'].map(s => `<option value="${s}">${s}</option>`).join('')}
+        </select>
+      </div>
+      <div class="form-group"><label class="form-label">Assigned To</label>
+        <select class="form-select" id="post-assigned"><option value="">Unassigned</option>${employeeOptions()}</select>
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">Scheduled Date</label><input class="form-input" type="date" id="post-date" value=""></div>
+      <div class="form-group"><label class="form-label">Scheduled Time</label><input class="form-input" type="time" id="post-time" value=""></div>
+    </div>
+    <div class="form-group"><label class="form-label">Tags</label><input class="form-input" id="post-tags" value="${brandName}"></div>
+    <div class="form-group"><label class="form-label">Media URLs</label>
+      <textarea class="form-textarea" id="post-media-urls" rows="2" placeholder="Paste image or video URLs, one per line"></textarea>
+    </div>
+    <div class="form-group"><label class="form-label">Notes</label><textarea class="form-textarea" id="post-notes" rows="2"></textarea></div>
+  `, `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button><button class="btn btn-primary" id="save-loc-post-btn">Save</button>`);
+
+  $$('#post-platforms .chip').forEach(c => c.onclick = () => c.classList.toggle('selected'));
+  lucide.createIcons({ nameAttr: 'data-lucide' });
+
+  // AI generation
+  $('#ai-gen-loc-post')?.addEventListener('click', () => {
+    const inline = $('#ai-gen-loc-post-inline');
+    inline.style.display = inline.style.display === 'none' ? 'flex' : 'none';
+    if (inline.style.display === 'flex') $('#ai-gen-loc-post-prompt').focus();
+  });
+  $('#ai-gen-loc-post-go')?.addEventListener('click', async () => {
+    const prompt = $('#ai-gen-loc-post-prompt').value.trim();
+    if (!prompt) return toast('Describe what the post should be about', 'error');
+    const btn = $('#ai-gen-loc-post-go');
+    btn.textContent = 'Generating...'; btn.disabled = true;
+    const selectedPl = $$('#post-platforms .chip.selected').map(c => c.dataset.value);
+    const result = await generateAIContent(
+      `Create a social media post for ${brandName} restaurant. Topic: ${prompt}. Target platforms: ${selectedPl.join(', ') || 'Instagram, Facebook'}.\nRespond in this exact JSON format:\n{"title": "short catchy title", "body": "the full caption/post text with emojis and hashtags", "tags": ["tag1", "tag2"]}\nOnly output the JSON, nothing else.`, 400
+    );
+    btn.textContent = 'Generate'; btn.disabled = false;
+    if (!result) return toast('Failed to generate content', 'error');
+    try {
+      const parsed = JSON.parse(result.replace(/```json?\n?/g, '').replace(/```/g, '').trim());
+      if (parsed.title) $('#post-title').value = parsed.title;
+      if (parsed.body) $('#post-body').value = parsed.body;
+      if (parsed.tags?.length) $('#post-tags').value = [brandName, ...parsed.tags].join(', ');
+      toast('Content generated — review and edit', 'success');
+      $('#ai-gen-loc-post-inline').style.display = 'none';
+    } catch {
+      $('#post-body').value = result;
+      toast('Content generated', 'success');
+      $('#ai-gen-loc-post-inline').style.display = 'none';
+    }
+  });
+  $('#ai-gen-loc-post-prompt')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') $('#ai-gen-loc-post-go').click(); });
+
+  $('#save-loc-post-btn').onclick = async () => {
+    const title = $('#post-title').value.trim();
+    if (!title) return toast('Title is required', 'error');
+    const tagsRaw = $('#post-tags').value.split(',').map(t => t.trim()).filter(Boolean);
+    // Ensure brand tag is always included
+    if (!tagsRaw.some(t => t.toLowerCase() === brandName.toLowerCase())) tagsRaw.unshift(brandName);
+    const obj = {
+      title,
+      body: $('#post-body').value,
+      platforms: $$('#post-platforms .chip.selected').map(c => c.dataset.value),
+      status: $('#post-status').value,
+      assigned_to: $('#post-assigned').value || null,
+      scheduled_date: $('#post-date').value || null,
+      scheduled_time: $('#post-time').value || null,
+      tags: tagsRaw,
+      media_urls: $('#post-media-urls').value.split('\n').map(u => u.trim()).filter(Boolean),
+      notes: $('#post-notes').value,
+      created_by: currentUser.id,
+    };
+    await sb.from('content_posts').insert(obj);
+    await logActivity('create_post', `Created post for ${brandName}: ${obj.title}`);
+    closeModal();
+    toast('Post created', 'success');
+    renderLocSubPage($('#loc-page-content'));
+  };
+}
+
+// Open campaign editor scoped to this brand
+function openLocCampaignEditor(ctx, id) {
+  if (id) { window.editCampaign(id); return; }
+  const brandName = ctx.restaurant.name;
+  const types = ['seasonal', 'promotion', 'brand', 'influencer'];
+  const statuses = ['planning', 'active', 'paused', 'completed'];
+  const allPlatforms = ['Instagram', 'Facebook', 'Twitter', 'TikTok', 'LinkedIn', 'YouTube'];
+
+  openModal('New Campaign — ' + brandName, `
+    <div class="form-group"><label class="form-label">Name</label><input class="form-input" id="camp-name" value=""></div>
+    <div class="form-group"><label class="form-label">Description</label><textarea class="form-textarea" id="camp-desc"></textarea></div>
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">Type</label>
+        <select class="form-select" id="camp-type">${types.map(t => `<option value="${t}">${t}</option>`).join('')}</select>
+      </div>
+      <div class="form-group"><label class="form-label">Status</label>
+        <select class="form-select" id="camp-status">${statuses.map(s => `<option value="${s}">${s}</option>`).join('')}</select>
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">Start Date</label><input class="form-input" type="date" id="camp-start" value=""></div>
+      <div class="form-group"><label class="form-label">End Date</label><input class="form-input" type="date" id="camp-end" value=""></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">Budget ($)</label><input class="form-input" type="number" id="camp-budget" value=""></div>
+      <div class="form-group"><label class="form-label">Spend ($)</label><input class="form-input" type="number" id="camp-spend" value="0"></div>
+    </div>
+    <div class="form-group"><label class="form-label">Platforms</label>
+      <div class="chip-select" id="camp-platforms">${allPlatforms.map(p => `<div class="chip" data-value="${p}">${p}</div>`).join('')}</div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">KPI Target</label><input class="form-input" id="camp-kpi-target" value=""></div>
+      <div class="form-group"><label class="form-label">KPI Actual</label><input class="form-input" id="camp-kpi-actual" value=""></div>
+    </div>
+    <div class="form-group"><label class="form-label">Owner</label>
+      <select class="form-select" id="camp-owner"><option value="">None</option>${employeeOptions()}</select>
+    </div>
+    <div class="form-group"><label class="form-label">Notes</label><textarea class="form-textarea" id="camp-notes"></textarea></div>
+  `, `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button><button class="btn btn-primary" id="save-loc-camp-btn">Save</button>`);
+
+  $$('#camp-platforms .chip').forEach(ch => ch.onclick = () => ch.classList.toggle('selected'));
+
+  $('#save-loc-camp-btn').onclick = async () => {
+    const name = $('#camp-name').value.trim();
+    if (!name) return toast('Name is required', 'error');
+    const obj = {
+      name,
+      description: $('#camp-desc').value,
+      campaign_type: $('#camp-type').value,
+      status: $('#camp-status').value,
+      start_date: $('#camp-start').value || null,
+      end_date: $('#camp-end').value || null,
+      budget: parseFloat($('#camp-budget').value) || 0,
+      spend: parseFloat($('#camp-spend').value) || 0,
+      platforms: $$('#camp-platforms .chip.selected').map(c => c.dataset.value),
+      kpi_target: $('#camp-kpi-target').value,
+      kpi_actual: $('#camp-kpi-actual').value,
+      owner_id: $('#camp-owner').value || null,
+      brands: [brandName],
+      tags: [brandName],
+      notes: $('#camp-notes').value,
+    };
+    await sb.from('campaigns').insert(obj);
+    await logActivity('create_campaign', `Created campaign for ${brandName}: ${obj.name}`);
+    closeModal();
+    toast('Campaign created', 'success');
+    renderLocSubPage($('#loc-page-content'));
+  };
+}
+
+// Open review editor scoped to this brand
+function openLocReviewEditor(ctx) {
+  const brandName = ctx.restaurant.name;
+  openModal('Add Review — ' + brandName, `
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">Reviewer Name</label><input class="form-input" id="rev-name" value=""></div>
+      <div class="form-group"><label class="form-label">Platform</label>
+        <select class="form-select" id="rev-platform">
+          ${['Google', 'Yelp', 'Facebook', 'TripAdvisor', 'DoorDash', 'UberEats', 'GrubHub', 'OpenTable', 'Other'].map(p => `<option value="${p}">${p}</option>`).join('')}
+        </select>
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">Rating</label>
+        <select class="form-select" id="rev-rating">
+          ${[5,4,3,2,1].map(r => `<option value="${r}">${'★'.repeat(r)}${'☆'.repeat(5-r)} (${r})</option>`).join('')}
+        </select>
+      </div>
+      <div class="form-group"><label class="form-label">Review Date</label><input class="form-input" type="date" id="rev-date" value="${new Date().toISOString().slice(0,10)}"></div>
+    </div>
+    <div class="form-group"><label class="form-label">Review Text</label><textarea class="form-textarea" id="rev-text" rows="4"></textarea></div>
+    <div class="form-group"><label class="form-label">Status</label>
+      <select class="form-select" id="rev-status">
+        ${['pending', 'responded', 'flagged'].map(s => `<option value="${s}">${s}</option>`).join('')}
+      </select>
+    </div>
+  `, `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button><button class="btn btn-primary" id="save-loc-rev-btn">Save</button>`);
+
+  $('#save-loc-rev-btn').onclick = async () => {
+    const obj = {
+      reviewer_name: $('#rev-name').value.trim() || 'Anonymous',
+      platform: $('#rev-platform').value,
+      rating: parseInt($('#rev-rating').value),
+      review_date: $('#rev-date').value || new Date().toISOString().slice(0, 10),
+      review_text: $('#rev-text').value,
+      restaurant_name: brandName,
+      status: $('#rev-status').value,
+      tags: [brandName],
+    };
+    await sb.from('reviews').insert(obj);
+    await logActivity('add_review', `Added review for ${brandName}: ${obj.rating}★ by ${obj.reviewer_name}`);
+    closeModal();
+    toast('Review added', 'success');
+    renderLocSubPage($('#loc-page-content'));
+  };
+}
+
+// Open social account editor scoped to this brand
+function openLocSocialEditor(ctx) {
+  const brandName = ctx.restaurant.name;
+  openModal('Connect Account — ' + brandName, `
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">Platform</label>
+        <select class="form-select" id="soc-platform">
+          ${['Instagram', 'Facebook', 'Twitter', 'TikTok', 'LinkedIn', 'YouTube', 'Pinterest', 'Yelp', 'Google Business'].map(p => `<option value="${p}">${p}</option>`).join('')}
+        </select>
+      </div>
+      <div class="form-group"><label class="form-label">Handle</label><input class="form-input" id="soc-handle" placeholder="@username"></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">Profile URL</label><input class="form-input" id="soc-url" placeholder="https://..."></div>
+      <div class="form-group"><label class="form-label">Followers</label><input class="form-input" type="number" id="soc-followers" value="0"></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">Status</label>
+        <select class="form-select" id="soc-status">
+          ${['active', 'inactive', 'pending'].map(s => `<option value="${s}">${s}</option>`).join('')}
+        </select>
+      </div>
+      <div class="form-group"><label class="form-label">Managed By</label>
+        <select class="form-select" id="soc-managed"><option value="">Unassigned</option>${employeeOptions()}</select>
+      </div>
+    </div>
+    <div class="form-group"><label class="form-label">Bio</label><textarea class="form-textarea" id="soc-bio" rows="2"></textarea></div>
+    <div class="form-group"><label class="form-label">Notes</label><textarea class="form-textarea" id="soc-notes" rows="2"></textarea></div>
+  `, `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button><button class="btn btn-primary" id="save-loc-soc-btn">Save</button>`);
+
+  $('#save-loc-soc-btn').onclick = async () => {
+    const handle = $('#soc-handle').value.trim();
+    if (!handle) return toast('Handle is required', 'error');
+    const obj = {
+      platform: $('#soc-platform').value,
+      handle,
+      profile_url: $('#soc-url').value.trim(),
+      followers: parseInt($('#soc-followers').value) || 0,
+      status: $('#soc-status').value,
+      managed_by: $('#soc-managed').value || null,
+      bio: $('#soc-bio').value,
+      notes: `${brandName} — ${$('#soc-notes').value}`,
+      tags: [brandName],
+    };
+    await sb.from('social_accounts').insert(obj);
+    await logActivity('connect_social', `Connected ${obj.platform} account @${obj.handle} for ${brandName}`);
+    closeModal();
+    toast('Account connected', 'success');
+    renderLocSubPage($('#loc-page-content'));
+  };
+}
+
 
 // --- Location Settings ---
 async function renderLocSettings(container, ctx) {
