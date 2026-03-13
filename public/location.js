@@ -783,32 +783,33 @@ function initNotifications() {
   });
 }
 
-// --- Theme ---
+// --- Theme (matches app.js: data-theme attribute + hermes-theme key) ---
 function initTheme() {
-  const saved = localStorage.getItem('hermes_theme');
-  if (saved === 'light') document.body.classList.add('light-mode');
+  const saved = localStorage.getItem('hermes-theme') || localStorage.getItem('ivea-theme') || 'dark';
+  applyTheme(saved);
   const toggle = $('#theme-toggle');
   if (toggle) {
     toggle.onclick = () => {
-      document.body.classList.toggle('light-mode');
-      const isLight = document.body.classList.contains('light-mode');
-      localStorage.setItem('hermes_theme', isLight ? 'light' : 'dark');
-      const darkIcon = $('#theme-icon-dark');
-      const lightIcon = $('#theme-icon-light');
-      const label = $('#theme-label');
-      if (darkIcon) darkIcon.style.display = isLight ? 'none' : '';
-      if (lightIcon) lightIcon.style.display = isLight ? '' : 'none';
-      if (label) label.textContent = isLight ? 'Light' : 'Dark';
+      const current = document.documentElement.getAttribute('data-theme') || 'dark';
+      const next = current === 'dark' ? 'light' : 'dark';
+      localStorage.setItem('hermes-theme', next);
+      applyTheme(next);
     };
-    // Set initial state
-    const isLight = document.body.classList.contains('light-mode');
-    const darkIcon = $('#theme-icon-dark');
-    const lightIcon = $('#theme-icon-light');
-    const label = $('#theme-label');
-    if (darkIcon) darkIcon.style.display = isLight ? 'none' : '';
-    if (lightIcon) lightIcon.style.display = isLight ? '' : 'none';
-    if (label) label.textContent = isLight ? 'Light' : 'Dark';
   }
+}
+
+function applyTheme(theme) {
+  if (theme === 'light') {
+    document.documentElement.setAttribute('data-theme', 'light');
+  } else {
+    document.documentElement.removeAttribute('data-theme');
+  }
+  const darkIcon = $('#theme-icon-dark');
+  const lightIcon = $('#theme-icon-light');
+  const label = $('#theme-label');
+  if (darkIcon) darkIcon.style.display = theme === 'dark' ? '' : 'none';
+  if (lightIcon) lightIcon.style.display = theme === 'light' ? '' : 'none';
+  if (label) label.textContent = theme === 'dark' ? 'Dark' : 'Light';
 }
 
 // --- Init ---
