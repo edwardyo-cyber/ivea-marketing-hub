@@ -8,6 +8,10 @@ const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZ
 let OPENAI_KEY = ''; // Loaded from Supabase settings at runtime
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
+// Install API middleware proxy — all sb.from() calls now route through /api/data
+// except login which uses the original Supabase client directly
+installDbProxy();
+
 // --- State ---
 let currentUser = null;
 let currentPage = 'dashboard';
@@ -16,8 +20,6 @@ let notifications = [];
 let chartInstances = {};
 let selectedRestaurantId = null;
 let restaurantLocationsCache = {};
-let selectedLocationContext = null; // { restaurantId, locationIndex, restaurant, location }
-let locationSubPage = 'loc-dashboard';
 
 // --- Helpers ---
 const $ = (sel, ctx = document) => ctx.querySelector(sel);
@@ -107,7 +109,7 @@ function csvExport(data, filename) {
 
 async function logActivity(action, details) {
   if (!currentUser) return;
-  await sb.from('activity_log').insert({ employee_id: currentUser.id, action, details });
+  await db.insert('activity_log', { employee_id: currentUser.id, action, details });
 }
 
 function showLoading(container) {
@@ -167,7 +169,8 @@ async function tryLogin() {
   const code = $$('.code-input').map(i => i.value).join('');
   if (code.length !== 4) return;
   $('#login-error').textContent = '';
-  const { data, error } = await sb.from('employees').select('*').eq('login_code', code).eq('is_active', true);
+  // Login uses original Supabase client directly (user not authenticated yet)
+  const { data, error } = await sb._originalFrom('employees').select('*').eq('login_code', code).eq('is_active', true);
   if (error || !data?.length) {
     $('#login-error').textContent = 'Invalid code. Please try again.';
     $$('.code-input').forEach(i => i.value = '');
@@ -197,8 +200,8 @@ async function showApp() {
   $('#app-shell').classList.remove('hidden');
   // Load OpenAI key from Supabase settings
   try {
-    const { data } = await sb.from('settings').select('value').eq('key', 'openai_api_key').single();
-    if (data) OPENAI_KEY = data.value;
+    const val = await db.getSetting('openai_api_key');
+    if (val) OPENAI_KEY = val;
   } catch(e) { console.log('No OpenAI key in settings'); }
   renderSidebar();
   renderHeader();
@@ -229,6 +232,12 @@ const NAV_ITEMS = [
     { id: 'inbox', icon: 'inbox', label: 'Inbox' },
     { id: 'text-messages', icon: 'smartphone', label: 'Text Messages' },
     { id: 'reviews', icon: 'message-square', label: 'Reviews' },
+  ]},
+  { section: 'Marketing', items: [
+    { id: 'seo', icon: 'search', label: 'SEO' },
+    { id: 'ads', icon: 'target', label: 'Ads Manager' },
+    { id: 'competitors', icon: 'eye', label: 'Competitors' },
+    { id: 'loyalty', icon: 'crown', label: 'Loyalty & Promos' },
   ]},
   { section: 'Analytics', items: [
     { id: 'reports', icon: 'bar-chart-3', label: 'Reports' },
@@ -295,7 +304,7 @@ function renderHeader() {
 // --- Routing ---
 function navigate(page) {
   currentPage = page;
-  if (page !== 'restaurants') { selectedRestaurantId = null; selectedLocationContext = null; }
+  if (page !== 'restaurants') { selectedRestaurantId = null; }
   // Update sidebar active
   $$('.nav-item').forEach(n => n.classList.remove('active'));
   $$('.nav-item').forEach(n => {
@@ -322,6 +331,10 @@ function navigate(page) {
     'inbox': renderInbox,
     'text-messages': renderTextMessages,
     'reviews': renderReviews,
+    'seo': renderSEO,
+    'ads': renderAds,
+    'competitors': renderCompetitors,
+    'loyalty': renderLoyalty,
     'reports': renderReports,
     'social-accounts': renderSocialAccounts,
     'team': renderTeam,
@@ -362,7 +375,7 @@ function openConfirm(title, body, onConfirm) {
 let employeeCache = {};
 async function getEmployees() {
   if (Object.keys(employeeCache).length) return employeeCache;
-  const { data } = await sb.from('employees').select('*').order('name');
+  const { data } = await db.select('employees', { order: { column: 'name', ascending: true } });
   if (data) data.forEach(e => employeeCache[e.id] = e);
   return employeeCache;
 }
@@ -405,13 +418,13 @@ function makeSortable(tableEl, data, renderRow, tbody) {
 async function renderDashboard(container) {
   await getEmployees();
   const [postsRes, campaignsRes, influencersRes, reviewsRes, restaurantsRes, socialRes, activityRes] = await Promise.all([
-    sb.from('content_posts').select('*'),
-    sb.from('campaigns').select('*'),
-    sb.from('influencers').select('*'),
-    sb.from('reviews').select('*'),
-    sb.from('restaurants').select('*'),
-    sb.from('social_accounts').select('*'),
-    sb.from('activity_log').select('*').order('created_at', { ascending: false }).limit(20),
+    db.select('content_posts'),
+    db.select('campaigns'),
+    db.select('influencers'),
+    db.select('reviews'),
+    db.select('restaurants'),
+    db.select('social_accounts'),
+    db.select('activity_log', { order: { column: 'created_at', ascending: false }, limit: 20 }),
   ]);
   const posts = postsRes.data || [];
   const campaigns = campaignsRes.data || [];
@@ -486,8 +499,8 @@ async function renderDashboard(container) {
 // --- Restaurant Locations helpers ---
 async function getRestaurantLocations(restaurantId) {
   try {
-    const { data } = await sb.from('settings').select('value').eq('key', `locations_${restaurantId}`).single();
-    const locations = data?.value ? JSON.parse(data.value) : [];
+    const val = await db.getSetting(`locations_${restaurantId}`);
+    const locations = val ? JSON.parse(val) : [];
     restaurantLocationsCache[restaurantId] = locations;
     return locations;
   } catch { return []; }
@@ -495,28 +508,15 @@ async function getRestaurantLocations(restaurantId) {
 
 async function saveRestaurantLocations(restaurantId, locations) {
   restaurantLocationsCache[restaurantId] = locations;
-  const key = `locations_${restaurantId}`;
-  try {
-    const { data: existing } = await sb.from('settings').select('key').eq('key', key).single();
-    if (existing) {
-      await sb.from('settings').update({ value: JSON.stringify(locations) }).eq('key', key);
-    } else {
-      await sb.from('settings').insert({ key, value: JSON.stringify(locations) });
-    }
-  } catch {
-    await sb.from('settings').insert({ key, value: JSON.stringify(locations) });
-  }
+  await db.setSetting(`locations_${restaurantId}`, JSON.stringify(locations));
 }
 
 async function renderRestaurants(container) {
-  if (selectedLocationContext) {
-    return renderLocationMarketing(container);
-  }
   if (selectedRestaurantId) {
     return renderRestaurantDetail(container, selectedRestaurantId);
   }
 
-  const { data: restaurants } = await sb.from('restaurants').select('*').order('name');
+  const { data: restaurants } = await db.select('restaurants', { order: { column: 'name', ascending: true } });
   const items = restaurants || [];
   const totalLocations = items.reduce((s, r) => s + (r.location_count || 0), 0);
   const activeCount = items.filter(r => r.status === 'active').length;
@@ -575,7 +575,7 @@ async function renderRestaurants(container) {
 }
 
 async function renderRestaurantDetail(container, id) {
-  const { data: restaurant } = await sb.from('restaurants').select('*').eq('id', id).single();
+  const { data: restaurant } = await db.getById('restaurants', id);
   if (!restaurant) { selectedRestaurantId = null; renderRestaurants(container); return; }
   const locations = await getRestaurantLocations(id);
   const initials = (restaurant.name || '').split(' ').map(w => w[0]).join('').substring(0, 2).toUpperCase();
@@ -629,8 +629,8 @@ async function renderRestaurantDetail(container, id) {
 window.editRestaurant = async function(id) {
   let r = {};
   if (id) {
-    const { data } = await sb.from('restaurants').select('*').eq('id', id).single();
-    r = data || {};
+    const res = await db.getById('restaurants', id);
+    r = res.data || {};
   }
   openModal(id ? 'Edit Restaurant' : 'Add Restaurant', `
     <div class="form-group"><label class="form-label">Brand Name</label><input class="form-input" id="rest-name" value="${r.name || ''}"></div>
@@ -652,10 +652,10 @@ window.editRestaurant = async function(id) {
       brand_logo_url: $('#rest-logo').value.trim(),
     };
     if (id) {
-      await sb.from('restaurants').update(obj).eq('id', id);
+      await db.update('restaurants', id, obj);
       await logActivity('update_restaurant', `Updated: ${name}`);
     } else {
-      await sb.from('restaurants').insert(obj);
+      await db.insert('restaurants', obj);
       await logActivity('create_restaurant', `Added: ${name}`);
     }
     closeModal();
@@ -666,9 +666,9 @@ window.editRestaurant = async function(id) {
 
 window.deleteRestaurant = function(id) {
   openConfirm('Delete Restaurant', 'Are you sure you want to delete this restaurant?', async () => {
-    await sb.from('restaurants').delete().eq('id', id);
+    await db.delete('restaurants', id);
     // Clean up locations data
-    await sb.from('settings').delete().eq('key', `locations_${id}`);
+    await db.delete('settings', null, { filters: { key: `locations_${id}` } });
     delete restaurantLocationsCache[id];
     await logActivity('delete_restaurant', 'Deleted a restaurant');
     toast('Restaurant deleted', 'success');
@@ -682,14 +682,9 @@ window.openBrandDetail = function(id) {
   navigate('restaurants');
 };
 
-window.viewLocation = async function(restaurantId, index) {
-  const { data: restaurant } = await sb.from('restaurants').select('*').eq('id', restaurantId).single();
-  const locations = await getRestaurantLocations(restaurantId);
-  const location = locations[index];
-  if (!restaurant || !location) return toast('Location not found', 'error');
-  selectedLocationContext = { restaurantId, locationIndex: index, restaurant, location };
-  locationSubPage = 'loc-dashboard';
-  navigate('restaurants');
+window.viewLocation = function(restaurantId, index) {
+  // Open location in a new browser tab
+  window.open(`location.html?restaurant_id=${restaurantId}&location_index=${index}`, '_blank');
 };
 
 window.editLocation = async function(restaurantId, index) {
@@ -743,7 +738,7 @@ window.editLocation = async function(restaurantId, index) {
       locations.push(obj);
     }
     await saveRestaurantLocations(restaurantId, locations);
-    await sb.from('restaurants').update({ location_count: locations.length }).eq('id', restaurantId);
+    await db.update('restaurants', restaurantId, { location_count: locations.length });
     closeModal();
     toast(isEdit ? 'Location updated' : 'Location added', 'success');
     await logActivity(isEdit ? 'update_location' : 'create_location', `${isEdit ? 'Updated' : 'Added'}: ${obj.name}`);
@@ -755,7 +750,7 @@ window.editLocation = async function(restaurantId, index) {
     openConfirm('Delete Location', `Delete "${loc.name || 'this location'}"?`, async () => {
       locations.splice(index, 1);
       await saveRestaurantLocations(restaurantId, locations);
-      await sb.from('restaurants').update({ location_count: locations.length }).eq('id', restaurantId);
+      await db.update('restaurants', restaurantId, { location_count: locations.length });
       closeModal();
       toast('Location deleted', 'success');
       await logActivity('delete_location', `Deleted: ${loc.name}`);
@@ -764,774 +759,7 @@ window.editLocation = async function(restaurantId, index) {
   };
 };
 
-// ============================================
-// LOCATION-LEVEL MARKETING PAGES
-// ============================================
-const LOC_NAV_ITEMS = [
-  { id: 'loc-dashboard', icon: 'layout-dashboard', label: 'Dashboard' },
-  { id: 'loc-content', icon: 'file-text', label: 'Content Hub' },
-  { id: 'loc-calendar', icon: 'calendar', label: 'Calendar' },
-  { id: 'loc-campaigns', icon: 'megaphone', label: 'Campaigns' },
-  { id: 'loc-reviews', icon: 'message-square', label: 'Reviews' },
-  { id: 'loc-reports', icon: 'bar-chart-3', label: 'Reports' },
-  { id: 'loc-social', icon: 'share-2', label: 'Social Accounts' },
-  { id: 'loc-audit', icon: 'scroll-text', label: 'Audit Log' },
-  { id: 'loc-settings', icon: 'settings', label: 'Settings' },
-];
 
-function locKey() {
-  const ctx = selectedLocationContext;
-  return ctx ? `${ctx.restaurantId}_${ctx.locationIndex}` : '';
-}
-
-async function renderLocationMarketing(container) {
-  const ctx = selectedLocationContext;
-  if (!ctx) return renderRestaurants(container);
-  const { restaurant, location, restaurantId, locationIndex } = ctx;
-  const locName = location.name || `Location ${locationIndex + 1}`;
-  const fullName = `${restaurant.name} — ${locName}`;
-
-  container.innerHTML = `
-    <div class="breadcrumb" style="margin-bottom:16px">
-      <span class="breadcrumb-link" onclick="selectedRestaurantId=null;selectedLocationContext=null;navigate('restaurants')">Restaurants</span>
-      <i data-lucide="chevron-right" style="width:14px;height:14px;color:var(--text-muted)"></i>
-      <span class="breadcrumb-link" onclick="selectedLocationContext=null;selectedRestaurantId='${restaurantId}';navigate('restaurants')">${restaurant.name}</span>
-      <i data-lucide="chevron-right" style="width:14px;height:14px;color:var(--text-muted)"></i>
-      <span>${locName}</span>
-    </div>
-    <div class="loc-marketing-layout">
-      <div class="loc-sidebar">
-        <div class="loc-sidebar-header">
-          <div style="font-weight:600;font-size:14px;color:var(--text-primary)">${locName}</div>
-          <div style="font-size:11px;color:var(--text-muted);margin-top:2px">${location.address || ''}${location.city ? ', ' + location.city : ''}</div>
-        </div>
-        <nav class="loc-nav" id="loc-nav">
-          ${LOC_NAV_ITEMS.map(item => `
-            <div class="loc-nav-item ${locationSubPage === item.id ? 'active' : ''}" data-page="${item.id}">
-              <i data-lucide="${item.icon}" style="width:16px;height:16px"></i>
-              <span>${item.label}</span>
-            </div>
-          `).join('')}
-        </nav>
-      </div>
-      <div class="loc-content" id="loc-page-content">
-        <div class="loading-spinner"></div>
-      </div>
-    </div>
-  `;
-  lucide.createIcons({ nameAttr: 'data-lucide' });
-
-  // Nav clicks
-  $$('.loc-nav-item', container).forEach(item => {
-    item.onclick = () => {
-      locationSubPage = item.dataset.page;
-      $$('.loc-nav-item', container).forEach(n => n.classList.remove('active'));
-      item.classList.add('active');
-      renderLocSubPage($('#loc-page-content'));
-    };
-  });
-
-  renderLocSubPage($('#loc-page-content'));
-}
-
-async function renderLocSubPage(container) {
-  if (!container) return;
-  const ctx = selectedLocationContext;
-  const lk = locKey();
-  container.innerHTML = '<div class="loading-spinner"></div>';
-
-  const pages = {
-    'loc-dashboard': renderLocDashboard,
-    'loc-content': renderLocContent,
-    'loc-calendar': renderLocCalendar,
-    'loc-campaigns': renderLocCampaigns,
-    'loc-reviews': renderLocReviews,
-    'loc-reports': renderLocReports,
-    'loc-social': renderLocSocial,
-    'loc-audit': renderLocAudit,
-    'loc-settings': renderLocSettings,
-  };
-  if (pages[locationSubPage]) await pages[locationSubPage](container, ctx);
-}
-
-// === LOCATION CRUD HELPER FUNCTIONS ===
-
-// Helper: get all posts scoped to this brand
-async function getLocPosts(ctx) {
-  const brandName = ctx.restaurant.name;
-  const { data: posts } = await sb.from('content_posts').select('*').order('created_at', { ascending: false });
-  return (posts || []).filter(p => {
-    const tags = parseJSON(p.tags);
-    return tags.some(t => t.toLowerCase() === brandName.toLowerCase()) || tags.some(t => t.toLowerCase().startsWith('brand:') && t.slice(6).toLowerCase() === brandName.toLowerCase());
-  });
-}
-
-// Helper: get all campaigns scoped to this brand
-async function getLocCampaigns(ctx) {
-  const brandName = ctx.restaurant.name;
-  const { data: campaigns } = await sb.from('campaigns').select('*').order('created_at', { ascending: false });
-  return (campaigns || []).filter(c => {
-    const brands = parseJSON(c.brands);
-    const tags = parseJSON(c.tags);
-    return brands.some(b => b.toLowerCase() === brandName.toLowerCase()) || tags.some(t => t.toLowerCase() === brandName.toLowerCase());
-  });
-}
-
-// Helper: get all reviews scoped to this brand
-async function getLocReviews(ctx) {
-  const brandName = ctx.restaurant.name;
-  const { data: reviews } = await sb.from('reviews').select('*').order('created_at', { ascending: false });
-  return (reviews || []).filter(r => (r.restaurant_name || '').toLowerCase() === brandName.toLowerCase());
-}
-
-// Helper: get all social accounts scoped to this brand
-async function getLocSocialAccounts(ctx) {
-  const brandName = ctx.restaurant.name;
-  const { data: accounts } = await sb.from('social_accounts').select('*').order('created_at', { ascending: false });
-  return (accounts || []).filter(a => {
-    const tags = parseJSON(a.tags || '[]');
-    const notes = (a.notes || '').toLowerCase();
-    const bio = (a.bio || '').toLowerCase();
-    return tags.some(t => t.toLowerCase() === brandName.toLowerCase()) || notes.includes(brandName.toLowerCase()) || bio.includes(brandName.toLowerCase());
-  });
-}
-
-// --- Location Dashboard ---
-async function renderLocDashboard(container, ctx) {
-  const locName = ctx.location.name || 'This Location';
-  const locPosts = await getLocPosts(ctx);
-  const locCampaigns = await getLocCampaigns(ctx);
-  const locReviews = await getLocReviews(ctx);
-  const avgRating = locReviews.length > 0 ? (locReviews.reduce((s, r) => s + (r.rating || 0), 0) / locReviews.length).toFixed(1) : '—';
-
-  container.innerHTML = `
-    <h2 style="margin:0 0 4px 0;font-size:20px">${locName} Dashboard</h2>
-    <p style="color:var(--text-muted);font-size:13px;margin:0 0 20px 0">${ctx.location.address || ''}${ctx.location.city ? ', ' + ctx.location.city : ''}${ctx.location.state ? ', ' + ctx.location.state : ''}</p>
-    <div class="kpi-grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:24px">
-      <div class="kpi-card"><div class="kpi-label">Posts</div><div class="kpi-value">${locPosts.length}</div></div>
-      <div class="kpi-card"><div class="kpi-label">Campaigns</div><div class="kpi-value">${locCampaigns.length}</div></div>
-      <div class="kpi-card"><div class="kpi-label">Reviews</div><div class="kpi-value">${locReviews.length}</div></div>
-      <div class="kpi-card"><div class="kpi-label">Avg Rating</div><div class="kpi-value" style="color:var(--warning)">${avgRating}</div></div>
-    </div>
-    <div class="card" style="padding:20px">
-      <h3 style="margin:0 0 12px 0;font-size:15px">Quick Actions</h3>
-      <div style="display:flex;gap:8px;flex-wrap:wrap">
-        ${canEdit() ? `
-        <button class="btn btn-primary btn-sm" id="loc-dash-new-post"><i data-lucide="plus" style="width:14px;height:14px"></i> Create Post</button>
-        <button class="btn btn-secondary btn-sm" id="loc-dash-new-camp"><i data-lucide="megaphone" style="width:14px;height:14px"></i> New Campaign</button>
-        <button class="btn btn-secondary btn-sm" id="loc-dash-new-review"><i data-lucide="message-square" style="width:14px;height:14px"></i> Add Review</button>
-        ` : ''}
-        <button class="btn btn-secondary btn-sm" onclick="locationSubPage='loc-reviews';renderLocSubPage($('#loc-page-content'));$$('.loc-nav-item').forEach(n=>{n.classList.remove('active');if(n.dataset.page==='loc-reviews')n.classList.add('active')})"><i data-lucide="star" style="width:14px;height:14px"></i> View Reviews</button>
-      </div>
-    </div>
-    ${locReviews.length > 0 ? `
-    <div class="card" style="padding:20px;margin-top:16px">
-      <h3 style="margin:0 0 12px 0;font-size:15px">Recent Reviews</h3>
-      ${locReviews.slice(0, 5).map(r => `
-        <div style="padding:8px 0;border-bottom:1px solid var(--border)">
-          <div style="display:flex;justify-content:space-between;align-items:center">
-            <span style="font-weight:500;font-size:13px">${r.reviewer_name || 'Anonymous'}</span>
-            <span style="color:var(--warning);font-size:13px">${'★'.repeat(r.rating || 0)}${'☆'.repeat(5 - (r.rating || 0))}</span>
-          </div>
-          <p style="font-size:12px;color:var(--text-secondary);margin:4px 0 0 0">${(r.review_text || '').substring(0, 120)}${(r.review_text || '').length > 120 ? '...' : ''}</p>
-        </div>
-      `).join('')}
-    </div>` : ''}
-  `;
-  lucide.createIcons({ nameAttr: 'data-lucide' });
-  $('#loc-dash-new-post')?.addEventListener('click', () => openLocPostEditor(ctx));
-  $('#loc-dash-new-camp')?.addEventListener('click', () => openLocCampaignEditor(ctx));
-  $('#loc-dash-new-review')?.addEventListener('click', () => openLocReviewEditor(ctx));
-}
-
-// --- Location Content Hub ---
-async function renderLocContent(container, ctx) {
-  const locPosts = await getLocPosts(ctx);
-
-  container.innerHTML = `
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
-      <div><h2 style="margin:0;font-size:20px">Content Hub</h2><p style="color:var(--text-muted);font-size:13px;margin:4px 0 0 0">${ctx.location.name} — ${locPosts.length} post${locPosts.length !== 1 ? 's' : ''}</p></div>
-      ${canEdit() ? '<button class="btn btn-primary btn-sm" id="loc-new-post-btn"><i data-lucide="plus" style="width:14px;height:14px"></i> New Post</button>' : ''}
-    </div>
-    ${locPosts.length === 0 ? `<div class="empty-state" style="padding:40px;text-align:center"><i data-lucide="file-text" style="width:40px;height:40px;color:var(--text-muted)"></i><p style="margin-top:8px;color:var(--text-muted)">No posts yet for ${ctx.restaurant.name}</p><p style="font-size:12px;color:var(--text-muted)">Click "New Post" to create content scoped to this brand.</p></div>` : `
-    <div class="table-wrapper"><table>
-      <thead><tr><th>Title</th><th>Platform</th><th>Status</th><th>Date</th><th>Actions</th></tr></thead>
-      <tbody>${locPosts.map(p => `<tr>
-        <td>${p.title || 'Untitled'}</td>
-        <td>${parseJSON(p.platforms).map(pl => badgeHTML(pl)).join(' ') || '—'}</td>
-        <td>${badgeHTML(p.status || 'draft')}</td>
-        <td>${formatDate(p.scheduled_date || p.created_at)}</td>
-        <td style="white-space:nowrap">
-          ${canEdit() ? `<button class="btn btn-sm btn-secondary" onclick="editPost('${p.id}')"><i data-lucide="pencil" style="width:12px;height:12px"></i></button>
-          <button class="btn btn-sm" style="color:var(--danger)" onclick="deletePost('${p.id}')"><i data-lucide="trash-2" style="width:12px;height:12px"></i></button>` : ''}
-        </td>
-      </tr>`).join('')}</tbody>
-    </table></div>`}
-  `;
-  lucide.createIcons({ nameAttr: 'data-lucide' });
-  $('#loc-new-post-btn')?.addEventListener('click', () => openLocPostEditor(ctx));
-}
-
-// --- Location Calendar ---
-async function renderLocCalendar(container, ctx) {
-  const locPosts = await getLocPosts(ctx);
-  const scheduled = locPosts.filter(p => p.scheduled_date);
-
-  const now = new Date();
-  const month = now.toLocaleString('en-US', { month: 'long', year: 'numeric' });
-  const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
-  const firstDay = new Date(now.getFullYear(), now.getMonth(), 1).getDay();
-
-  let calCells = '';
-  for (let i = 0; i < firstDay; i++) calCells += '<div class="cal-cell empty"></div>';
-  for (let d = 1; d <= daysInMonth; d++) {
-    const dateStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-    const dayPosts = scheduled.filter(p => p.scheduled_date && p.scheduled_date.startsWith(dateStr));
-    const isToday = d === now.getDate();
-    calCells += `<div class="cal-cell ${isToday ? 'today' : ''}">
-      <div class="cal-day">${d}</div>
-      ${dayPosts.map(p => `<div class="cal-event" title="${p.title || 'Post'}" onclick="editPost('${p.id}')" style="cursor:pointer">${(p.title || 'Post').substring(0, 15)}</div>`).join('')}
-    </div>`;
-  }
-
-  container.innerHTML = `
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
-      <div>
-        <h2 style="margin:0 0 4px 0;font-size:20px">Calendar</h2>
-        <p style="color:var(--text-muted);font-size:13px;margin:0">${ctx.location.name} — ${month}</p>
-      </div>
-      ${canEdit() ? '<button class="btn btn-primary btn-sm" id="loc-cal-new-post"><i data-lucide="plus" style="width:14px;height:14px"></i> Schedule Post</button>' : ''}
-    </div>
-    <div class="cal-grid">
-      <div class="cal-header">Sun</div><div class="cal-header">Mon</div><div class="cal-header">Tue</div>
-      <div class="cal-header">Wed</div><div class="cal-header">Thu</div><div class="cal-header">Fri</div><div class="cal-header">Sat</div>
-      ${calCells}
-    </div>
-  `;
-  lucide.createIcons({ nameAttr: 'data-lucide' });
-  $('#loc-cal-new-post')?.addEventListener('click', () => openLocPostEditor(ctx));
-}
-
-// --- Location Campaigns ---
-async function renderLocCampaigns(container, ctx) {
-  const locCampaigns = await getLocCampaigns(ctx);
-
-  container.innerHTML = `
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
-      <div><h2 style="margin:0;font-size:20px">Campaigns</h2><p style="color:var(--text-muted);font-size:13px;margin:4px 0 0 0">${ctx.location.name} — ${locCampaigns.length} campaign${locCampaigns.length !== 1 ? 's' : ''}</p></div>
-      ${canEdit() ? '<button class="btn btn-primary btn-sm" id="loc-new-camp-btn"><i data-lucide="plus" style="width:14px;height:14px"></i> New Campaign</button>' : ''}
-    </div>
-    ${locCampaigns.length === 0 ? `<div class="empty-state" style="padding:40px;text-align:center"><i data-lucide="megaphone" style="width:40px;height:40px;color:var(--text-muted)"></i><p style="margin-top:8px;color:var(--text-muted)">No campaigns yet for ${ctx.restaurant.name}</p><p style="font-size:12px;color:var(--text-muted)">Click "New Campaign" to create one scoped to this brand.</p></div>` : `
-    <div class="table-wrapper"><table>
-      <thead><tr><th>Name</th><th>Type</th><th>Status</th><th>Budget</th><th>Start</th><th>End</th><th>Actions</th></tr></thead>
-      <tbody>${locCampaigns.map(c => `<tr>
-        <td>${c.name || 'Untitled'}</td>
-        <td>${badgeHTML(c.campaign_type || '—')}</td>
-        <td>${badgeHTML(c.status || 'planning')}</td>
-        <td>${c.budget ? (typeof c.budget === 'string' && c.budget.startsWith('$') ? c.budget : '$' + Number(c.budget).toLocaleString()) : '—'}</td>
-        <td>${formatDate(c.start_date)}</td>
-        <td>${formatDate(c.end_date)}</td>
-        <td style="white-space:nowrap">
-          ${canEdit() ? `<button class="btn btn-sm btn-secondary" onclick="editCampaign('${c.id}')"><i data-lucide="pencil" style="width:12px;height:12px"></i></button>
-          <button class="btn btn-sm" style="color:var(--danger)" onclick="deleteCampaign('${c.id}')"><i data-lucide="trash-2" style="width:12px;height:12px"></i></button>` : ''}
-        </td>
-      </tr>`).join('')}</tbody>
-    </table></div>`}
-  `;
-  lucide.createIcons({ nameAttr: 'data-lucide' });
-  $('#loc-new-camp-btn')?.addEventListener('click', () => openLocCampaignEditor(ctx));
-}
-
-// --- Location Reviews ---
-async function renderLocReviews(container, ctx) {
-  const locReviews = await getLocReviews(ctx);
-  const avgRating = locReviews.length > 0 ? (locReviews.reduce((s, r) => s + (r.rating || 0), 0) / locReviews.length).toFixed(1) : '—';
-  const dist = [5,4,3,2,1].map(star => ({ star, count: locReviews.filter(r => r.rating === star).length }));
-
-  container.innerHTML = `
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
-      <div>
-        <h2 style="margin:0 0 4px 0;font-size:20px">Reviews</h2>
-        <p style="color:var(--text-muted);font-size:13px;margin:0">${ctx.location.name}</p>
-      </div>
-      ${canEdit() ? '<button class="btn btn-primary btn-sm" id="loc-new-review-btn"><i data-lucide="plus" style="width:14px;height:14px"></i> Add Review</button>' : ''}
-    </div>
-    <div style="display:flex;gap:24px;margin-bottom:20px;flex-wrap:wrap">
-      <div class="kpi-card" style="min-width:100px;text-align:center"><div class="kpi-label">Average</div><div class="kpi-value" style="color:var(--warning);font-size:32px">${avgRating}</div></div>
-      <div class="kpi-card" style="min-width:100px;text-align:center"><div class="kpi-label">Total</div><div class="kpi-value">${locReviews.length}</div></div>
-      <div class="card" style="flex:1;padding:12px;min-width:200px">
-        ${dist.map(d => `<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
-          <span style="font-size:12px;width:16px">${d.star}★</span>
-          <div style="flex:1;height:8px;background:var(--bg-hover);border-radius:4px;overflow:hidden">
-            <div style="height:100%;width:${locReviews.length > 0 ? (d.count / locReviews.length * 100) : 0}%;background:var(--warning);border-radius:4px"></div>
-          </div>
-          <span style="font-size:11px;color:var(--text-muted);width:24px">${d.count}</span>
-        </div>`).join('')}
-      </div>
-    </div>
-    ${locReviews.length === 0 ? `<div class="empty-state" style="padding:40px;text-align:center"><i data-lucide="message-square" style="width:40px;height:40px;color:var(--text-muted)"></i><p style="margin-top:8px;color:var(--text-muted)">No reviews yet for ${ctx.restaurant.name}</p><p style="font-size:12px;color:var(--text-muted)">Click "Add Review" to manually add a review, or sync from Google.</p></div>` : `
-    <div class="table-wrapper"><table>
-      <thead><tr><th>Reviewer</th><th>Rating</th><th>Platform</th><th>Content</th><th>Status</th><th>Actions</th></tr></thead>
-      <tbody>${locReviews.map(r => `<tr>
-        <td>${r.reviewer_name || 'Anonymous'}</td>
-        <td style="color:var(--warning)">${'★'.repeat(r.rating || 0)}${'☆'.repeat(5 - (r.rating || 0))}</td>
-        <td>${badgeHTML(r.platform || '—')}</td>
-        <td style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${r.review_text || '—'}</td>
-        <td>${badgeHTML(r.status || 'pending')}</td>
-        <td style="white-space:nowrap">
-          ${canEdit() ? `<button class="btn btn-sm btn-primary" onclick="respondToReview('${r.id}')"><i data-lucide="reply" style="width:12px;height:12px"></i></button>` : ''}
-        </td>
-      </tr>`).join('')}</tbody>
-    </table></div>`}
-  `;
-  lucide.createIcons({ nameAttr: 'data-lucide' });
-  $('#loc-new-review-btn')?.addEventListener('click', () => openLocReviewEditor(ctx));
-}
-
-// --- Location Reports ---
-async function renderLocReports(container, ctx) {
-  const locPosts = await getLocPosts(ctx);
-  const locReviews = await getLocReviews(ctx);
-
-  const published = locPosts.filter(p => p.status === 'published').length;
-  const draft = locPosts.filter(p => p.status === 'draft').length;
-  const scheduled = locPosts.filter(p => p.status === 'scheduled').length;
-  const review = locPosts.filter(p => p.status === 'review').length;
-  const approved = locPosts.filter(p => p.status === 'approved').length;
-
-  container.innerHTML = `
-    <h2 style="margin:0 0 4px 0;font-size:20px">Reports</h2>
-    <p style="color:var(--text-muted);font-size:13px;margin:0 0 16px 0">${ctx.location.name} — Performance Overview</p>
-    <div class="kpi-grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:24px">
-      <div class="kpi-card"><div class="kpi-label">Published</div><div class="kpi-value" style="color:var(--success)">${published}</div></div>
-      <div class="kpi-card"><div class="kpi-label">Drafts</div><div class="kpi-value">${draft}</div></div>
-      <div class="kpi-card"><div class="kpi-label">Scheduled</div><div class="kpi-value" style="color:var(--accent)">${scheduled}</div></div>
-      <div class="kpi-card"><div class="kpi-label">Reviews</div><div class="kpi-value">${locReviews.length}</div></div>
-    </div>
-    <div class="card" style="padding:20px">
-      <h3 style="margin:0 0 12px 0;font-size:15px">Content Breakdown</h3>
-      <div style="display:flex;gap:16px;flex-wrap:wrap">
-        <div style="flex:1;min-width:200px">
-          <div style="font-size:12px;color:var(--text-muted);margin-bottom:8px">Posts by Status</div>
-          ${[{label:'Published',count:published,color:'var(--success)'},{label:'Draft',count:draft,color:'var(--text-muted)'},{label:'Scheduled',count:scheduled,color:'var(--accent)'},{label:'In Review',count:review,color:'var(--warning)'},{label:'Approved',count:approved,color:'var(--info)'}].filter(s => s.count > 0).map(s => `
-            <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
-              <div style="width:8px;height:8px;border-radius:50%;background:${s.color}"></div>
-              <span style="font-size:13px;flex:1">${s.label}</span>
-              <span style="font-size:13px;font-weight:600">${s.count}</span>
-            </div>
-          `).join('')}
-          ${locPosts.length === 0 ? '<p style="font-size:13px;color:var(--text-muted)">No posts yet</p>' : ''}
-        </div>
-        <div style="flex:1;min-width:200px">
-          <div style="font-size:12px;color:var(--text-muted);margin-bottom:8px">Review Platforms</div>
-          ${locReviews.length === 0 ? '<p style="font-size:13px;color:var(--text-muted)">No reviews yet</p>' : (() => {
-            const platforms = {};
-            locReviews.forEach(r => { const p = r.platform || 'Other'; platforms[p] = (platforms[p] || 0) + 1; });
-            return Object.entries(platforms).map(([p, c]) => `
-              <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
-                ${badgeHTML(p)}
-                <span style="font-size:13px;font-weight:600;margin-left:auto">${c}</span>
-              </div>
-            `).join('');
-          })()}
-        </div>
-      </div>
-    </div>
-  `;
-}
-
-// --- Location Social Accounts ---
-async function renderLocSocial(container, ctx) {
-  const items = await getLocSocialAccounts(ctx);
-
-  container.innerHTML = `
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
-      <div>
-        <h2 style="margin:0 0 4px 0;font-size:20px">Social Accounts</h2>
-        <p style="color:var(--text-muted);font-size:13px;margin:0">${ctx.location.name} — Connected accounts</p>
-      </div>
-      ${canEdit() ? '<button class="btn btn-primary btn-sm" id="loc-new-social-btn"><i data-lucide="plus" style="width:14px;height:14px"></i> Connect Account</button>' : ''}
-    </div>
-    ${items.length === 0 ? `<div class="empty-state" style="padding:40px;text-align:center"><i data-lucide="share-2" style="width:40px;height:40px;color:var(--text-muted)"></i><p style="margin-top:8px;color:var(--text-muted)">No social accounts connected for ${ctx.restaurant.name}</p><p style="font-size:12px;color:var(--text-muted)">Click "Connect Account" to add a social account for this brand.</p></div>` : `
-    <div class="table-wrapper"><table>
-      <thead><tr><th>Platform</th><th>Handle</th><th>Followers</th><th>Status</th><th>Actions</th></tr></thead>
-      <tbody>${items.map(a => `<tr>
-        <td>${badgeHTML(a.platform || '—')}</td>
-        <td>${a.handle || a.username || '—'}</td>
-        <td>${a.followers ? Number(a.followers).toLocaleString() : '—'}</td>
-        <td>${badgeHTML(a.status || 'active')}</td>
-        <td style="white-space:nowrap">
-          ${canEdit() ? `<button class="btn btn-sm btn-secondary" onclick="editSocialAccount('${a.id}')"><i data-lucide="pencil" style="width:12px;height:12px"></i></button>
-          <button class="btn btn-sm" style="color:var(--danger)" onclick="deleteSocialAccount('${a.id}')"><i data-lucide="trash-2" style="width:12px;height:12px"></i></button>` : ''}
-        </td>
-      </tr>`).join('')}</tbody>
-    </table></div>`}
-  `;
-  lucide.createIcons({ nameAttr: 'data-lucide' });
-  $('#loc-new-social-btn')?.addEventListener('click', () => openLocSocialEditor(ctx));
-}
-
-// --- Location Audit Log ---
-async function renderLocAudit(container, ctx) {
-  const { data: logs } = await sb.from('activity_log').select('*').order('created_at', { ascending: false }).limit(100);
-  const rName = (ctx.restaurant.name || '').toLowerCase();
-  const lName = (ctx.location.name || '').toLowerCase();
-  const locLogs = (logs || []).filter(l => {
-    const desc = (l.description || '').toLowerCase();
-    return desc.includes(rName) || desc.includes(lName);
-  });
-
-  container.innerHTML = `
-    <h2 style="margin:0 0 4px 0;font-size:20px">Audit Log</h2>
-    <p style="color:var(--text-muted);font-size:13px;margin:0 0 16px 0">${ctx.location.name} — Activity history</p>
-    ${locLogs.length === 0 ? `<div class="empty-state" style="padding:40px;text-align:center"><i data-lucide="scroll-text" style="width:40px;height:40px;color:var(--text-muted)"></i><p style="margin-top:8px;color:var(--text-muted)">No activity recorded yet for this location</p></div>` : `
-    <div class="table-wrapper"><table>
-      <thead><tr><th>Action</th><th>Description</th><th>User</th><th>Time</th></tr></thead>
-      <tbody>${locLogs.map(l => `<tr>
-        <td>${badgeHTML(l.action || '—')}</td>
-        <td>${l.description || '—'}</td>
-        <td>${l.user_name || '—'}</td>
-        <td>${formatDateTime(l.created_at)}</td>
-      </tr>`).join('')}</tbody>
-    </table></div>`}
-  `;
-  lucide.createIcons({ nameAttr: 'data-lucide' });
-}
-
-// ============ LOCATION-SCOPED CRUD MODAL FUNCTIONS ============
-
-// Open post editor scoped to this location/brand
-function openLocPostEditor(ctx, id) {
-  // Reuse the global editPost, but pre-fill brand tag
-  if (id) {
-    window.editPost(id);
-    return;
-  }
-  const brandName = ctx.restaurant.name;
-  const allPlatforms = ['Instagram', 'Facebook', 'Twitter', 'TikTok', 'LinkedIn', 'YouTube', 'Pinterest'];
-  openModal('New Post — ' + brandName, `
-    <div class="form-group"><label class="form-label">Title</label><input class="form-input" id="post-title" value=""></div>
-    <div class="form-group"><label class="form-label">Body</label><textarea class="form-textarea" id="post-body" rows="4"></textarea>
-      <button class="btn btn-sm ai-gen-btn" id="ai-gen-loc-post" type="button"><i data-lucide="sparkles"></i> Generate with AI</button>
-      <div class="ai-gen-inline" id="ai-gen-loc-post-inline" style="display:none">
-        <input type="text" class="form-input" id="ai-gen-loc-post-prompt" placeholder="What should this post be about?">
-        <button class="btn btn-sm btn-primary" id="ai-gen-loc-post-go">Generate</button>
-      </div>
-    </div>
-    <div class="form-group"><label class="form-label">Platforms</label>
-      <div class="chip-select" id="post-platforms">${allPlatforms.map(p => `<div class="chip" data-value="${p}">${p}</div>`).join('')}</div>
-    </div>
-    <div class="form-row">
-      <div class="form-group"><label class="form-label">Status</label>
-        <select class="form-select" id="post-status">
-          ${['draft','review','approved','scheduled','published'].map(s => `<option value="${s}">${s}</option>`).join('')}
-        </select>
-      </div>
-      <div class="form-group"><label class="form-label">Assigned To</label>
-        <select class="form-select" id="post-assigned"><option value="">Unassigned</option>${employeeOptions()}</select>
-      </div>
-    </div>
-    <div class="form-row">
-      <div class="form-group"><label class="form-label">Scheduled Date</label><input class="form-input" type="date" id="post-date" value=""></div>
-      <div class="form-group"><label class="form-label">Scheduled Time</label><input class="form-input" type="time" id="post-time" value=""></div>
-    </div>
-    <div class="form-group"><label class="form-label">Tags</label><input class="form-input" id="post-tags" value="${brandName}"></div>
-    <div class="form-group"><label class="form-label">Media URLs</label>
-      <textarea class="form-textarea" id="post-media-urls" rows="2" placeholder="Paste image or video URLs, one per line"></textarea>
-    </div>
-    <div class="form-group"><label class="form-label">Notes</label><textarea class="form-textarea" id="post-notes" rows="2"></textarea></div>
-  `, `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button><button class="btn btn-primary" id="save-loc-post-btn">Save</button>`);
-
-  $$('#post-platforms .chip').forEach(c => c.onclick = () => c.classList.toggle('selected'));
-  lucide.createIcons({ nameAttr: 'data-lucide' });
-
-  // AI generation
-  $('#ai-gen-loc-post')?.addEventListener('click', () => {
-    const inline = $('#ai-gen-loc-post-inline');
-    inline.style.display = inline.style.display === 'none' ? 'flex' : 'none';
-    if (inline.style.display === 'flex') $('#ai-gen-loc-post-prompt').focus();
-  });
-  $('#ai-gen-loc-post-go')?.addEventListener('click', async () => {
-    const prompt = $('#ai-gen-loc-post-prompt').value.trim();
-    if (!prompt) return toast('Describe what the post should be about', 'error');
-    const btn = $('#ai-gen-loc-post-go');
-    btn.textContent = 'Generating...'; btn.disabled = true;
-    const selectedPl = $$('#post-platforms .chip.selected').map(c => c.dataset.value);
-    const result = await generateAIContent(
-      `Create a social media post for ${brandName} restaurant. Topic: ${prompt}. Target platforms: ${selectedPl.join(', ') || 'Instagram, Facebook'}.\nRespond in this exact JSON format:\n{"title": "short catchy title", "body": "the full caption/post text with emojis and hashtags", "tags": ["tag1", "tag2"]}\nOnly output the JSON, nothing else.`, 400
-    );
-    btn.textContent = 'Generate'; btn.disabled = false;
-    if (!result) return toast('Failed to generate content', 'error');
-    try {
-      const parsed = JSON.parse(result.replace(/```json?\n?/g, '').replace(/```/g, '').trim());
-      if (parsed.title) $('#post-title').value = parsed.title;
-      if (parsed.body) $('#post-body').value = parsed.body;
-      if (parsed.tags?.length) $('#post-tags').value = [brandName, ...parsed.tags].join(', ');
-      toast('Content generated — review and edit', 'success');
-      $('#ai-gen-loc-post-inline').style.display = 'none';
-    } catch {
-      $('#post-body').value = result;
-      toast('Content generated', 'success');
-      $('#ai-gen-loc-post-inline').style.display = 'none';
-    }
-  });
-  $('#ai-gen-loc-post-prompt')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') $('#ai-gen-loc-post-go').click(); });
-
-  $('#save-loc-post-btn').onclick = async () => {
-    const title = $('#post-title').value.trim();
-    if (!title) return toast('Title is required', 'error');
-    const tagsRaw = $('#post-tags').value.split(',').map(t => t.trim()).filter(Boolean);
-    // Ensure brand tag is always included
-    if (!tagsRaw.some(t => t.toLowerCase() === brandName.toLowerCase())) tagsRaw.unshift(brandName);
-    const obj = {
-      title,
-      body: $('#post-body').value,
-      platforms: $$('#post-platforms .chip.selected').map(c => c.dataset.value),
-      status: $('#post-status').value,
-      assigned_to: $('#post-assigned').value || null,
-      scheduled_date: $('#post-date').value || null,
-      scheduled_time: $('#post-time').value || null,
-      tags: tagsRaw,
-      media_urls: $('#post-media-urls').value.split('\n').map(u => u.trim()).filter(Boolean),
-      notes: $('#post-notes').value,
-      created_by: currentUser.id,
-    };
-    await sb.from('content_posts').insert(obj);
-    await logActivity('create_post', `Created post for ${brandName}: ${obj.title}`);
-    closeModal();
-    toast('Post created', 'success');
-    renderLocSubPage($('#loc-page-content'));
-  };
-}
-
-// Open campaign editor scoped to this brand
-function openLocCampaignEditor(ctx, id) {
-  if (id) { window.editCampaign(id); return; }
-  const brandName = ctx.restaurant.name;
-  const types = ['seasonal', 'promotion', 'brand', 'influencer'];
-  const statuses = ['planning', 'active', 'paused', 'completed'];
-  const allPlatforms = ['Instagram', 'Facebook', 'Twitter', 'TikTok', 'LinkedIn', 'YouTube'];
-
-  openModal('New Campaign — ' + brandName, `
-    <div class="form-group"><label class="form-label">Name</label><input class="form-input" id="camp-name" value=""></div>
-    <div class="form-group"><label class="form-label">Description</label><textarea class="form-textarea" id="camp-desc"></textarea></div>
-    <div class="form-row">
-      <div class="form-group"><label class="form-label">Type</label>
-        <select class="form-select" id="camp-type">${types.map(t => `<option value="${t}">${t}</option>`).join('')}</select>
-      </div>
-      <div class="form-group"><label class="form-label">Status</label>
-        <select class="form-select" id="camp-status">${statuses.map(s => `<option value="${s}">${s}</option>`).join('')}</select>
-      </div>
-    </div>
-    <div class="form-row">
-      <div class="form-group"><label class="form-label">Start Date</label><input class="form-input" type="date" id="camp-start" value=""></div>
-      <div class="form-group"><label class="form-label">End Date</label><input class="form-input" type="date" id="camp-end" value=""></div>
-    </div>
-    <div class="form-row">
-      <div class="form-group"><label class="form-label">Budget ($)</label><input class="form-input" type="number" id="camp-budget" value=""></div>
-      <div class="form-group"><label class="form-label">Spend ($)</label><input class="form-input" type="number" id="camp-spend" value="0"></div>
-    </div>
-    <div class="form-group"><label class="form-label">Platforms</label>
-      <div class="chip-select" id="camp-platforms">${allPlatforms.map(p => `<div class="chip" data-value="${p}">${p}</div>`).join('')}</div>
-    </div>
-    <div class="form-row">
-      <div class="form-group"><label class="form-label">KPI Target</label><input class="form-input" id="camp-kpi-target" value=""></div>
-      <div class="form-group"><label class="form-label">KPI Actual</label><input class="form-input" id="camp-kpi-actual" value=""></div>
-    </div>
-    <div class="form-group"><label class="form-label">Owner</label>
-      <select class="form-select" id="camp-owner"><option value="">None</option>${employeeOptions()}</select>
-    </div>
-    <div class="form-group"><label class="form-label">Notes</label><textarea class="form-textarea" id="camp-notes"></textarea></div>
-  `, `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button><button class="btn btn-primary" id="save-loc-camp-btn">Save</button>`);
-
-  $$('#camp-platforms .chip').forEach(ch => ch.onclick = () => ch.classList.toggle('selected'));
-
-  $('#save-loc-camp-btn').onclick = async () => {
-    const name = $('#camp-name').value.trim();
-    if (!name) return toast('Name is required', 'error');
-    const obj = {
-      name,
-      description: $('#camp-desc').value,
-      campaign_type: $('#camp-type').value,
-      status: $('#camp-status').value,
-      start_date: $('#camp-start').value || null,
-      end_date: $('#camp-end').value || null,
-      budget: parseFloat($('#camp-budget').value) || 0,
-      spend: parseFloat($('#camp-spend').value) || 0,
-      platforms: $$('#camp-platforms .chip.selected').map(c => c.dataset.value),
-      kpi_target: $('#camp-kpi-target').value,
-      kpi_actual: $('#camp-kpi-actual').value,
-      owner_id: $('#camp-owner').value || null,
-      brands: [brandName],
-      tags: [brandName],
-      notes: $('#camp-notes').value,
-    };
-    await sb.from('campaigns').insert(obj);
-    await logActivity('create_campaign', `Created campaign for ${brandName}: ${obj.name}`);
-    closeModal();
-    toast('Campaign created', 'success');
-    renderLocSubPage($('#loc-page-content'));
-  };
-}
-
-// Open review editor scoped to this brand
-function openLocReviewEditor(ctx) {
-  const brandName = ctx.restaurant.name;
-  openModal('Add Review — ' + brandName, `
-    <div class="form-row">
-      <div class="form-group"><label class="form-label">Reviewer Name</label><input class="form-input" id="rev-name" value=""></div>
-      <div class="form-group"><label class="form-label">Platform</label>
-        <select class="form-select" id="rev-platform">
-          ${['Google', 'Yelp', 'Facebook', 'TripAdvisor', 'DoorDash', 'UberEats', 'GrubHub', 'OpenTable', 'Other'].map(p => `<option value="${p}">${p}</option>`).join('')}
-        </select>
-      </div>
-    </div>
-    <div class="form-row">
-      <div class="form-group"><label class="form-label">Rating</label>
-        <select class="form-select" id="rev-rating">
-          ${[5,4,3,2,1].map(r => `<option value="${r}">${'★'.repeat(r)}${'☆'.repeat(5-r)} (${r})</option>`).join('')}
-        </select>
-      </div>
-      <div class="form-group"><label class="form-label">Review Date</label><input class="form-input" type="date" id="rev-date" value="${new Date().toISOString().slice(0,10)}"></div>
-    </div>
-    <div class="form-group"><label class="form-label">Review Text</label><textarea class="form-textarea" id="rev-text" rows="4"></textarea></div>
-    <div class="form-group"><label class="form-label">Status</label>
-      <select class="form-select" id="rev-status">
-        ${['pending', 'responded', 'flagged'].map(s => `<option value="${s}">${s}</option>`).join('')}
-      </select>
-    </div>
-  `, `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button><button class="btn btn-primary" id="save-loc-rev-btn">Save</button>`);
-
-  $('#save-loc-rev-btn').onclick = async () => {
-    const obj = {
-      reviewer_name: $('#rev-name').value.trim() || 'Anonymous',
-      platform: $('#rev-platform').value,
-      rating: parseInt($('#rev-rating').value),
-      review_date: $('#rev-date').value || new Date().toISOString().slice(0, 10),
-      review_text: $('#rev-text').value,
-      restaurant_name: brandName,
-      status: $('#rev-status').value,
-      tags: [brandName],
-    };
-    await sb.from('reviews').insert(obj);
-    await logActivity('add_review', `Added review for ${brandName}: ${obj.rating}★ by ${obj.reviewer_name}`);
-    closeModal();
-    toast('Review added', 'success');
-    renderLocSubPage($('#loc-page-content'));
-  };
-}
-
-// Open social account editor scoped to this brand
-function openLocSocialEditor(ctx) {
-  const brandName = ctx.restaurant.name;
-  openModal('Connect Account — ' + brandName, `
-    <div class="form-row">
-      <div class="form-group"><label class="form-label">Platform</label>
-        <select class="form-select" id="soc-platform">
-          ${['Instagram', 'Facebook', 'Twitter', 'TikTok', 'LinkedIn', 'YouTube', 'Pinterest', 'Yelp', 'Google Business'].map(p => `<option value="${p}">${p}</option>`).join('')}
-        </select>
-      </div>
-      <div class="form-group"><label class="form-label">Handle</label><input class="form-input" id="soc-handle" placeholder="@username"></div>
-    </div>
-    <div class="form-row">
-      <div class="form-group"><label class="form-label">Profile URL</label><input class="form-input" id="soc-url" placeholder="https://..."></div>
-      <div class="form-group"><label class="form-label">Followers</label><input class="form-input" type="number" id="soc-followers" value="0"></div>
-    </div>
-    <div class="form-row">
-      <div class="form-group"><label class="form-label">Status</label>
-        <select class="form-select" id="soc-status">
-          ${['active', 'inactive', 'pending'].map(s => `<option value="${s}">${s}</option>`).join('')}
-        </select>
-      </div>
-      <div class="form-group"><label class="form-label">Managed By</label>
-        <select class="form-select" id="soc-managed"><option value="">Unassigned</option>${employeeOptions()}</select>
-      </div>
-    </div>
-    <div class="form-group"><label class="form-label">Bio</label><textarea class="form-textarea" id="soc-bio" rows="2"></textarea></div>
-    <div class="form-group"><label class="form-label">Notes</label><textarea class="form-textarea" id="soc-notes" rows="2"></textarea></div>
-  `, `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button><button class="btn btn-primary" id="save-loc-soc-btn">Save</button>`);
-
-  $('#save-loc-soc-btn').onclick = async () => {
-    const handle = $('#soc-handle').value.trim();
-    if (!handle) return toast('Handle is required', 'error');
-    const obj = {
-      platform: $('#soc-platform').value,
-      handle,
-      profile_url: $('#soc-url').value.trim(),
-      followers: parseInt($('#soc-followers').value) || 0,
-      status: $('#soc-status').value,
-      managed_by: $('#soc-managed').value || null,
-      bio: $('#soc-bio').value,
-      notes: `${brandName} — ${$('#soc-notes').value}`,
-      tags: [brandName],
-    };
-    await sb.from('social_accounts').insert(obj);
-    await logActivity('connect_social', `Connected ${obj.platform} account @${obj.handle} for ${brandName}`);
-    closeModal();
-    toast('Account connected', 'success');
-    renderLocSubPage($('#loc-page-content'));
-  };
-}
-
-
-// --- Location Settings ---
-async function renderLocSettings(container, ctx) {
-  const loc = ctx.location;
-  container.innerHTML = `
-    <h2 style="margin:0 0 4px 0;font-size:20px">Location Settings</h2>
-    <p style="color:var(--text-muted);font-size:13px;margin:0 0 16px 0">${ctx.location.name}</p>
-    <div class="card" style="padding:20px">
-      <h3 style="margin:0 0 16px 0;font-size:15px">Location Details</h3>
-      <div class="form-row">
-        <div class="form-group"><label class="form-label">Name</label><input class="form-input" id="ls-name" value="${loc.name || ''}"></div>
-        <div class="form-group"><label class="form-label">Status</label>
-          <select class="form-select" id="ls-status"><option value="active" ${loc.status === 'active' || !loc.status ? 'selected' : ''}>Active</option><option value="inactive" ${loc.status === 'inactive' ? 'selected' : ''}>Inactive</option></select>
-        </div>
-      </div>
-      <div class="form-group"><label class="form-label">Address</label><input class="form-input" id="ls-address" value="${loc.address || ''}"></div>
-      <div class="form-row">
-        <div class="form-group"><label class="form-label">City</label><input class="form-input" id="ls-city" value="${loc.city || ''}"></div>
-        <div class="form-group"><label class="form-label">State</label><input class="form-input" id="ls-state" value="${loc.state || ''}"></div>
-        <div class="form-group"><label class="form-label">ZIP</label><input class="form-input" id="ls-zip" value="${loc.zip || ''}"></div>
-      </div>
-      <div class="form-row">
-        <div class="form-group"><label class="form-label">Phone</label><input class="form-input" id="ls-phone" value="${loc.phone || ''}"></div>
-        <div class="form-group"><label class="form-label">Email</label><input class="form-input" id="ls-email" value="${loc.email || ''}"></div>
-      </div>
-      <div class="form-row">
-        <div class="form-group"><label class="form-label">Manager</label><input class="form-input" id="ls-manager" value="${loc.manager || ''}"></div>
-        <div class="form-group"><label class="form-label">Google Business ID</label><input class="form-input" id="ls-gbp" value="${loc.google_business_id || ''}"></div>
-      </div>
-      <div class="form-group"><label class="form-label">Notes</label><textarea class="form-textarea" id="ls-notes" rows="3">${loc.notes || ''}</textarea></div>
-      <div style="display:flex;gap:8px;margin-top:16px">
-        ${canEdit() ? '<button class="btn btn-primary" id="ls-save">Save Changes</button>' : ''}
-      </div>
-    </div>
-  `;
-
-  $('#ls-save')?.addEventListener('click', async () => {
-    const updated = {
-      name: $('#ls-name').value.trim(),
-      status: $('#ls-status').value,
-      address: $('#ls-address').value.trim(),
-      city: $('#ls-city').value.trim(),
-      state: $('#ls-state').value.trim(),
-      zip: $('#ls-zip').value.trim(),
-      phone: $('#ls-phone').value.trim(),
-      email: $('#ls-email').value.trim(),
-      manager: $('#ls-manager').value.trim(),
-      google_business_id: $('#ls-gbp').value.trim(),
-      notes: $('#ls-notes').value.trim(),
-    };
-    const locations = await getRestaurantLocations(ctx.restaurantId);
-    locations[ctx.locationIndex] = { ...locations[ctx.locationIndex], ...updated };
-    await saveRestaurantLocations(ctx.restaurantId, locations);
-    ctx.location = locations[ctx.locationIndex];
-    selectedLocationContext.location = ctx.location;
-    await logActivity('update_location_settings', `Updated settings: ${updated.name}`);
-    toast('Location settings saved', 'success');
-  });
-}
 
 // ============================================
 // PAGE: Content Hub
@@ -4981,6 +4209,1204 @@ function updateChartTheme(theme) {
       chart.update('none');
     });
   }
+}
+
+// ============================================
+// PAGE: SEO
+// ============================================
+async function renderSEO(container) {
+  await getEmployees();
+  const { data: restaurants } = await db.select('restaurants', { order: { column: 'name', ascending: true } });
+  const rests = restaurants || [];
+
+  container.innerHTML = `
+    <h1 class="page-title">SEO</h1>
+    <p class="page-subtitle">Local SEO management for all locations</p>
+    <div class="tabs">
+      <button class="tab active" data-tab="seo-gbp">Google Business</button>
+      <button class="tab" data-tab="seo-keywords">Keywords</button>
+      <button class="tab" data-tab="seo-citations">Citations</button>
+      <button class="tab" data-tab="seo-schema">Schema Markup</button>
+      <button class="tab" data-tab="seo-audit">SEO Audit</button>
+      <button class="tab" data-tab="seo-maps">Maps</button>
+    </div>
+    <div class="tab-content" id="seo-tab-content"></div>
+  `;
+  const tabs = $$('.tab', container);
+  const c = $('#seo-tab-content');
+
+  async function showTab(tab) {
+    tabs.forEach(t => t.classList.toggle('active', t.dataset.tab === tab));
+    showLoading(c);
+    if (tab === 'seo-gbp') await renderSEO_GBP(c, rests);
+    else if (tab === 'seo-keywords') await renderSEO_Keywords(c, rests);
+    else if (tab === 'seo-citations') await renderSEO_Citations(c, rests);
+    else if (tab === 'seo-schema') await renderSEO_Schema(c, rests);
+    else if (tab === 'seo-audit') await renderSEO_Audit(c, rests);
+    else if (tab === 'seo-maps') await renderSEO_Maps(c, rests);
+    lucide.createIcons({ nameAttr: 'data-lucide' });
+  }
+
+  tabs.forEach(t => t.addEventListener('click', () => showTab(t.dataset.tab)));
+  await showTab('seo-gbp');
+  lucide.createIcons({ nameAttr: 'data-lucide' });
+}
+
+async function renderSEO_GBP(container, restaurants) {
+  const { data: listings } = await db.select('gbp_listings');
+  const items = listings || [];
+  const connected = items.filter(l => l.sync_status === 'active').length;
+
+  container.innerHTML = `
+    <div class="kpi-grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:20px">
+      <div class="kpi-card"><div class="kpi-label">GBP Listings</div><div class="kpi-value">${items.length}</div></div>
+      <div class="kpi-card"><div class="kpi-label">Connected</div><div class="kpi-value" style="color:var(--success)">${connected}</div></div>
+      <div class="kpi-card"><div class="kpi-label">Needs Update</div><div class="kpi-value" style="color:var(--warning)">${items.filter(l => l.sync_status === 'stale').length}</div></div>
+      <div class="kpi-card"><div class="kpi-label">Not Connected</div><div class="kpi-value" style="color:var(--text-muted)">${restaurants.length - items.length}</div></div>
+    </div>
+    <div class="table-toolbar">
+      <div class="search-filter"><i data-lucide="search"></i><input type="text" placeholder="Search listings..." id="gbp-filter"></div>
+      <div style="margin-left:auto;display:flex;gap:8px">
+        <button class="btn btn-secondary btn-sm" id="gbp-sync-btn"><i data-lucide="refresh-cw"></i> Sync All</button>
+        <button class="btn btn-primary btn-sm" id="gbp-connect-btn"><i data-lucide="plus"></i> Connect GBP</button>
+      </div>
+    </div>
+    ${items.length === 0 ? `<div class="empty-state" style="padding:48px;text-align:center">
+      <i data-lucide="map-pin" style="width:48px;height:48px;color:var(--text-muted)"></i>
+      <h4 style="margin:12px 0 4px">No Google Business Profiles Connected</h4>
+      <p style="color:var(--text-muted)">Connect your Google Business Profile to manage listings, posts, photos, and Q&A.</p>
+      <button class="btn btn-primary" id="gbp-connect-empty"><i data-lucide="plus"></i> Connect Google Business Profile</button>
+    </div>` : `<div class="table-wrapper"><table>
+      <thead><tr><th>Location</th><th>Place ID</th><th>Status</th><th>Last Sync</th><th>Actions</th></tr></thead>
+      <tbody>${items.map(l => `<tr>
+        <td><strong>${l.name || '—'}</strong></td>
+        <td style="font-size:11px;color:var(--text-muted)">${l.place_id || '—'}</td>
+        <td>${badgeHTML(l.sync_status || 'unknown')}</td>
+        <td>${formatDate(l.last_synced_at)}</td>
+        <td><button class="btn btn-secondary btn-sm">Manage</button></td>
+      </tr>`).join('')}</tbody>
+    </table></div>`}
+  `;
+
+  const connectBtn = $('#gbp-connect-btn') || $('#gbp-connect-empty');
+  if (connectBtn) connectBtn.onclick = () => {
+    toast('Google Business Profile OAuth will be configured after deployment', 'info');
+  };
+  const syncBtn = $('#gbp-sync-btn');
+  if (syncBtn) syncBtn.onclick = () => toast('GBP sync initiated', 'info');
+}
+
+async function renderSEO_Keywords(container, restaurants) {
+  const { data: keywords } = await db.select('seo_keywords', { order: { column: 'created_at', ascending: false } });
+  const items = keywords || [];
+
+  container.innerHTML = `
+    <div class="kpi-grid" style="grid-template-columns:repeat(3,1fr);margin-bottom:20px">
+      <div class="kpi-card"><div class="kpi-label">Tracked Keywords</div><div class="kpi-value">${items.length}</div></div>
+      <div class="kpi-card"><div class="kpi-label">In Top 3</div><div class="kpi-value" style="color:var(--success)">${items.filter(k => k.current_rank && k.current_rank <= 3).length}</div></div>
+      <div class="kpi-card"><div class="kpi-label">Local Pack</div><div class="kpi-value" style="color:var(--accent)">${items.filter(k => k.in_local_pack).length}</div></div>
+    </div>
+    <div class="table-toolbar">
+      <div class="search-filter"><i data-lucide="search"></i><input type="text" placeholder="Filter keywords..." id="kw-filter"></div>
+      <div style="margin-left:auto;display:flex;gap:8px">
+        <button class="btn btn-secondary btn-sm" id="kw-suggest-btn"><i data-lucide="sparkles"></i> Auto-Suggest</button>
+        <button class="btn btn-primary btn-sm" id="kw-add-btn"><i data-lucide="plus"></i> Add Keyword</button>
+      </div>
+    </div>
+    ${items.length === 0 ? `<div class="empty-state" style="padding:48px;text-align:center">
+      <i data-lucide="search" style="width:48px;height:48px;color:var(--text-muted)"></i>
+      <h4 style="margin:12px 0 4px">No Keywords Tracked</h4>
+      <p style="color:var(--text-muted)">Add keywords to track your local search rankings.</p>
+    </div>` : `<div class="table-wrapper"><table>
+      <thead><tr><th data-key="keyword">Keyword</th><th>Type</th><th data-key="current_rank">Rank</th><th>Change</th><th>Local Pack</th><th>Volume</th><th>Location</th></tr></thead>
+      <tbody>${items.map(k => `<tr>
+        <td><strong>${k.keyword || '—'}</strong></td>
+        <td>${badgeHTML(k.keyword_type || 'custom')}</td>
+        <td style="font-weight:600">${k.current_rank || '—'}</td>
+        <td>${k.rank_change > 0 ? `<span style="color:var(--success)">▲${k.rank_change}</span>` : k.rank_change < 0 ? `<span style="color:var(--danger)">▼${Math.abs(k.rank_change)}</span>` : '—'}</td>
+        <td>${k.in_local_pack ? '<span style="color:var(--success)">✓</span>' : '—'}</td>
+        <td>${k.search_volume || '—'}</td>
+        <td style="font-size:12px;color:var(--text-muted)">${k.location_name || 'All'}</td>
+      </tr>`).join('')}</tbody>
+    </table></div>`}
+  `;
+
+  $('#kw-add-btn')?.addEventListener('click', () => {
+    openModal('Add Keyword', `
+      <div class="form-group"><label class="form-label">Keyword</label><input class="form-input" id="kw-text" placeholder="e.g., best tacos austin"></div>
+      <div class="form-group"><label class="form-label">Type</label>
+        <select class="form-select" id="kw-type">
+          <option value="primary_cuisine">Primary Cuisine</option>
+          <option value="dish_specific">Dish-Specific</option>
+          <option value="intent_modifier">Intent Modifier</option>
+          <option value="branded">Branded</option>
+          <option value="custom">Custom</option>
+        </select>
+      </div>
+      <div class="form-group"><label class="form-label">Restaurant</label>
+        <select class="form-select" id="kw-restaurant">
+          <option value="">All Locations</option>
+          ${restaurants.map(r => `<option value="${r.id}">${r.name}</option>`).join('')}
+        </select>
+      </div>
+    `, `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button><button class="btn btn-primary" id="kw-save">Save</button>`);
+    $('#kw-save').onclick = async () => {
+      const keyword = $('#kw-text').value.trim();
+      if (!keyword) return toast('Keyword is required', 'error');
+      await db.insert('seo_keywords', {
+        keyword,
+        keyword_type: $('#kw-type').value,
+        restaurant_id: $('#kw-restaurant').value || null,
+      });
+      closeModal();
+      toast('Keyword added', 'success');
+      await logActivity('add_keyword', `Added SEO keyword: ${keyword}`);
+      navigate('seo');
+    };
+  });
+}
+
+async function renderSEO_Citations(container) {
+  const { data: citations } = await db.select('citations');
+  const items = citations || [];
+  const healthy = items.filter(c => c.match_status === 'match').length;
+  const mismatched = items.filter(c => c.match_status === 'mismatch').length;
+
+  container.innerHTML = `
+    <div class="kpi-grid" style="grid-template-columns:repeat(3,1fr);margin-bottom:20px">
+      <div class="kpi-card"><div class="kpi-label">Total Citations</div><div class="kpi-value">${items.length}</div></div>
+      <div class="kpi-card"><div class="kpi-label">NAP Match</div><div class="kpi-value" style="color:var(--success)">${healthy}</div></div>
+      <div class="kpi-card"><div class="kpi-label">Mismatch</div><div class="kpi-value" style="color:var(--danger)">${mismatched}</div></div>
+    </div>
+    ${items.length === 0 ? `<div class="empty-state" style="padding:48px;text-align:center">
+      <i data-lucide="globe" style="width:48px;height:48px;color:var(--text-muted)"></i>
+      <h4 style="margin:12px 0 4px">No Citations Tracked</h4>
+      <p style="color:var(--text-muted)">Set up your canonical NAP and start tracking directory listings.</p>
+      <button class="btn btn-primary" id="setup-nap-btn"><i data-lucide="plus"></i> Set Up Canonical NAP</button>
+    </div>` : `<div class="table-wrapper"><table>
+      <thead><tr><th>Directory</th><th>Location</th><th>Status</th><th>Last Checked</th></tr></thead>
+      <tbody>${items.map(c => `<tr>
+        <td><strong>${c.directory_name || '—'}</strong></td>
+        <td>${c.location_name || '—'}</td>
+        <td>${c.match_status === 'match' ? '<span style="color:var(--success)">✓ Match</span>' : c.match_status === 'mismatch' ? '<span style="color:var(--danger)">✗ Mismatch</span>' : badgeHTML(c.match_status || 'unknown')}</td>
+        <td>${formatDate(c.last_checked_at)}</td>
+      </tr>`).join('')}</tbody>
+    </table></div>`}
+  `;
+}
+
+async function renderSEO_Schema(container) {
+  const { data: schemas } = await db.select('schema_markup');
+  const items = schemas || [];
+
+  container.innerHTML = `
+    <div class="kpi-grid" style="grid-template-columns:repeat(3,1fr);margin-bottom:20px">
+      <div class="kpi-card"><div class="kpi-label">Schema Markups</div><div class="kpi-value">${items.length}</div></div>
+      <div class="kpi-card"><div class="kpi-label">Valid</div><div class="kpi-value" style="color:var(--success)">${items.filter(s => s.validation_status === 'valid').length}</div></div>
+      <div class="kpi-card"><div class="kpi-label">Needs Update</div><div class="kpi-value" style="color:var(--warning)">${items.filter(s => s.validation_status === 'outdated').length}</div></div>
+    </div>
+    ${items.length === 0 ? `<div class="empty-state" style="padding:48px;text-align:center">
+      <i data-lucide="code" style="width:48px;height:48px;color:var(--text-muted)"></i>
+      <h4 style="margin:12px 0 4px">No Schema Markup Generated</h4>
+      <p style="color:var(--text-muted)">Generate Restaurant, Menu, and FAQ schema for your locations.</p>
+      <button class="btn btn-primary" id="gen-schema-btn"><i data-lucide="sparkles"></i> Auto-Generate Schema</button>
+    </div>` : `<div class="table-wrapper"><table>
+      <thead><tr><th>Location</th><th>Schema Type</th><th>Status</th><th>Last Updated</th><th>Actions</th></tr></thead>
+      <tbody>${items.map(s => `<tr>
+        <td><strong>${s.location_name || '—'}</strong></td>
+        <td>${s.schema_type || '—'}</td>
+        <td>${badgeHTML(s.validation_status || 'unknown')}</td>
+        <td>${formatDate(s.updated_at)}</td>
+        <td><button class="btn btn-secondary btn-sm">View Code</button></td>
+      </tr>`).join('')}</tbody>
+    </table></div>`}
+  `;
+}
+
+async function renderSEO_Audit(container) {
+  const { data: audits } = await db.select('seo_audits', { order: { column: 'created_at', ascending: false } });
+  const items = audits || [];
+
+  container.innerHTML = `
+    <div class="table-toolbar">
+      <h3 style="margin:0">SEO Audits</h3>
+      <div style="margin-left:auto"><button class="btn btn-primary btn-sm" id="run-audit-btn"><i data-lucide="play"></i> Run New Audit</button></div>
+    </div>
+    ${items.length === 0 ? `<div class="empty-state" style="padding:48px;text-align:center">
+      <i data-lucide="clipboard-check" style="width:48px;height:48px;color:var(--text-muted)"></i>
+      <h4 style="margin:12px 0 4px">No Audits Run Yet</h4>
+      <p style="color:var(--text-muted)">Run an SEO audit to check your restaurant pages for common issues.</p>
+    </div>` : `<div class="table-wrapper"><table>
+      <thead><tr><th>Location</th><th>URL</th><th>Score</th><th>Issues</th><th>Date</th></tr></thead>
+      <tbody>${items.map(a => `<tr>
+        <td><strong>${a.location_name || '—'}</strong></td>
+        <td style="font-size:12px;color:var(--text-muted)">${a.url || '—'}</td>
+        <td><strong style="color:${(a.score || 0) >= 80 ? 'var(--success)' : (a.score || 0) >= 50 ? 'var(--warning)' : 'var(--danger)'}">${a.score || 0}/100</strong></td>
+        <td>${a.issue_count || 0}</td>
+        <td>${formatDate(a.created_at)}</td>
+      </tr>`).join('')}</tbody>
+    </table></div>`}
+  `;
+
+  $('#run-audit-btn')?.addEventListener('click', () => {
+    openModal('Run SEO Audit', `
+      <div class="form-group"><label class="form-label">Website URL</label><input class="form-input" id="audit-url" placeholder="https://www.yourrestaurant.com"></div>
+      <div class="form-group"><label class="form-label">Location Name</label><input class="form-input" id="audit-loc" placeholder="e.g., Downtown Austin"></div>
+    `, `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button><button class="btn btn-primary" id="audit-run">Run Audit</button>`);
+    $('#audit-run').onclick = async () => {
+      const url = $('#audit-url').value.trim();
+      if (!url) return toast('URL is required', 'error');
+      toast('Running SEO audit...', 'info');
+      closeModal();
+      try {
+        const resp = await fetch('/api/seo-audit', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url, location_name: $('#audit-loc').value.trim() }),
+        });
+        if (resp.ok) { toast('Audit complete', 'success'); navigate('seo'); }
+        else toast('Audit failed — check API configuration', 'error');
+      } catch { toast('Audit failed — API not configured yet', 'error'); }
+    };
+  });
+}
+
+async function renderSEO_Maps(container) {
+  const { data: rankings } = await db.select('local_search_rankings');
+  const items = rankings || [];
+
+  container.innerHTML = `
+    <div class="kpi-grid" style="grid-template-columns:repeat(3,1fr);margin-bottom:20px">
+      <div class="kpi-card"><div class="kpi-label">Maps Rankings Tracked</div><div class="kpi-value">${items.length}</div></div>
+      <div class="kpi-card"><div class="kpi-label">In Top 3</div><div class="kpi-value" style="color:var(--success)">${items.filter(r => r.rank && r.rank <= 3).length}</div></div>
+      <div class="kpi-card"><div class="kpi-label">Not Ranking</div><div class="kpi-value" style="color:var(--text-muted)">${items.filter(r => !r.rank || r.rank > 20).length}</div></div>
+    </div>
+    ${items.length === 0 ? `<div class="empty-state" style="padding:48px;text-align:center">
+      <i data-lucide="map" style="width:48px;height:48px;color:var(--text-muted)"></i>
+      <h4 style="margin:12px 0 4px">No Maps Rankings Tracked</h4>
+      <p style="color:var(--text-muted)">Track your Google Maps visibility for key search terms.</p>
+    </div>` : `<div class="table-wrapper"><table>
+      <thead><tr><th>Keyword</th><th>Location</th><th>Rank</th><th>Change</th><th>Last Check</th></tr></thead>
+      <tbody>${items.map(r => `<tr>
+        <td><strong>${r.keyword || '—'}</strong></td>
+        <td>${r.location_name || '—'}</td>
+        <td style="font-weight:600">${r.rank || '—'}</td>
+        <td>${r.rank_change > 0 ? `<span style="color:var(--success)">▲${r.rank_change}</span>` : r.rank_change < 0 ? `<span style="color:var(--danger)">▼${Math.abs(r.rank_change)}</span>` : '—'}</td>
+        <td>${formatDate(r.checked_at)}</td>
+      </tr>`).join('')}</tbody>
+    </table></div>`}
+  `;
+}
+
+// ============================================
+// PAGE: Ads Manager
+// ============================================
+async function renderAds(container) {
+  await getEmployees();
+  const [connectionsRes, campaignsRes, performanceRes] = await Promise.all([
+    db.select('ad_platform_connections'),
+    db.select('ad_campaigns', { order: { column: 'created_at', ascending: false } }),
+    db.select('ad_performance_daily', { order: { column: 'date', ascending: false }, limit: 30 }),
+  ]);
+  const connections = connectionsRes.data || [];
+  const campaigns = campaignsRes.data || [];
+  const performance = performanceRes.data || [];
+
+  const totalSpend = performance.reduce((s, p) => s + (p.spend || 0), 0);
+  const totalImpressions = performance.reduce((s, p) => s + (p.impressions || 0), 0);
+  const totalClicks = performance.reduce((s, p) => s + (p.clicks || 0), 0);
+  const totalConversions = performance.reduce((s, p) => s + (p.conversions || 0), 0);
+
+  container.innerHTML = `
+    <h1 class="page-title">Ads Manager</h1>
+    <p class="page-subtitle">Manage Google Ads & Meta campaigns across all locations</p>
+    <div class="tabs">
+      <button class="tab active" data-tab="ads-overview">Overview</button>
+      <button class="tab" data-tab="ads-campaigns">Campaigns</button>
+      <button class="tab" data-tab="ads-creatives">Creatives</button>
+      <button class="tab" data-tab="ads-audiences">Audiences</button>
+      <button class="tab" data-tab="ads-experiments">A/B Tests</button>
+      <button class="tab" data-tab="ads-connections">Connections</button>
+    </div>
+    <div class="tab-content" id="ads-tab-content"></div>
+  `;
+  const tabs = $$('.tab', container);
+  const c = $('#ads-tab-content');
+
+  async function showTab(tab) {
+    tabs.forEach(t => t.classList.toggle('active', t.dataset.tab === tab));
+    showLoading(c);
+    if (tab === 'ads-overview') renderAds_Overview(c, { campaigns, performance, totalSpend, totalImpressions, totalClicks, totalConversions });
+    else if (tab === 'ads-campaigns') await renderAds_Campaigns(c);
+    else if (tab === 'ads-creatives') await renderAds_Creatives(c);
+    else if (tab === 'ads-audiences') await renderAds_Audiences(c);
+    else if (tab === 'ads-experiments') await renderAds_Experiments(c);
+    else if (tab === 'ads-connections') renderAds_Connections(c, connections);
+    lucide.createIcons({ nameAttr: 'data-lucide' });
+  }
+
+  tabs.forEach(t => t.addEventListener('click', () => showTab(t.dataset.tab)));
+  showTab('ads-overview');
+  lucide.createIcons({ nameAttr: 'data-lucide' });
+}
+
+function renderAds_Overview(container, { campaigns, performance, totalSpend, totalImpressions, totalClicks, totalConversions }) {
+  const ctr = totalImpressions > 0 ? ((totalClicks / totalImpressions) * 100).toFixed(2) : '0';
+  const cpa = totalConversions > 0 ? (totalSpend / totalConversions).toFixed(2) : '—';
+
+  container.innerHTML = `
+    <div class="kpi-grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:20px">
+      <div class="kpi-card"><div class="kpi-label">Total Spend (30d)</div><div class="kpi-value">$${totalSpend.toLocaleString()}</div></div>
+      <div class="kpi-card"><div class="kpi-label">Impressions</div><div class="kpi-value">${totalImpressions.toLocaleString()}</div></div>
+      <div class="kpi-card"><div class="kpi-label">CTR</div><div class="kpi-value" style="color:var(--accent)">${ctr}%</div></div>
+      <div class="kpi-card"><div class="kpi-label">Cost / Conversion</div><div class="kpi-value" style="color:var(--success)">${cpa === '—' ? '—' : '$' + cpa}</div></div>
+    </div>
+    <div class="kpi-grid" style="grid-template-columns:repeat(2,1fr);margin-bottom:20px">
+      <div class="kpi-card"><div class="kpi-label">Active Campaigns</div><div class="kpi-value">${campaigns.filter(c => c.status === 'active').length}</div></div>
+      <div class="kpi-card"><div class="kpi-label">Total Conversions</div><div class="kpi-value" style="color:var(--success)">${totalConversions}</div></div>
+    </div>
+    ${campaigns.length === 0 ? `<div class="empty-state" style="padding:48px;text-align:center">
+      <i data-lucide="target" style="width:48px;height:48px;color:var(--text-muted)"></i>
+      <h4 style="margin:12px 0 4px">No Ad Campaigns Yet</h4>
+      <p style="color:var(--text-muted)">Connect Google Ads or Meta to start managing campaigns.</p>
+    </div>` : `<h3 style="margin:20px 0 12px">Recent Campaigns</h3>
+    <div class="table-wrapper"><table>
+      <thead><tr><th>Campaign</th><th>Platform</th><th>Status</th><th>Budget</th><th>Spend</th><th>Clicks</th></tr></thead>
+      <tbody>${campaigns.slice(0, 10).map(c => `<tr>
+        <td><strong>${c.name || '—'}</strong></td>
+        <td>${badgeHTML(c.platform || '—')}</td>
+        <td>${badgeHTML(c.status || 'draft')}</td>
+        <td>$${(c.daily_budget || 0).toLocaleString()}/day</td>
+        <td>$${(c.total_spend || 0).toLocaleString()}</td>
+        <td>${(c.total_clicks || 0).toLocaleString()}</td>
+      </tr>`).join('')}</tbody>
+    </table></div>`}
+  `;
+}
+
+async function renderAds_Campaigns(container) {
+  const { data: campaigns } = await db.select('ad_campaigns', { order: { column: 'created_at', ascending: false } });
+  const items = campaigns || [];
+  const { data: restaurants } = await db.select('restaurants', { order: { column: 'name', ascending: true } });
+
+  container.innerHTML = `
+    <div class="table-toolbar">
+      <div class="search-filter"><i data-lucide="search"></i><input type="text" placeholder="Filter campaigns..." id="ad-camp-filter"></div>
+      <div style="margin-left:auto"><button class="btn btn-primary btn-sm" id="new-ad-camp-btn"><i data-lucide="plus"></i> Create Campaign</button></div>
+    </div>
+    ${items.length === 0 ? `<div class="empty-state" style="padding:48px;text-align:center">
+      <i data-lucide="target" style="width:48px;height:48px;color:var(--text-muted)"></i>
+      <h4 style="margin:12px 0 4px">No Campaigns</h4>
+      <p style="color:var(--text-muted)">Create your first ad campaign.</p>
+    </div>` : `<div class="table-wrapper"><table>
+      <thead><tr><th>Name</th><th>Platform</th><th>Objective</th><th>Status</th><th>Budget</th><th>Spend</th><th>Actions</th></tr></thead>
+      <tbody>${items.map(c => `<tr>
+        <td><strong>${c.name || '—'}</strong></td>
+        <td>${badgeHTML(c.platform || '—')}</td>
+        <td>${c.objective || '—'}</td>
+        <td>${badgeHTML(c.status || 'draft')}</td>
+        <td>$${(c.daily_budget || 0).toLocaleString()}/day</td>
+        <td>$${(c.total_spend || 0).toLocaleString()}</td>
+        <td><button class="btn btn-secondary btn-sm">Edit</button></td>
+      </tr>`).join('')}</tbody>
+    </table></div>`}
+  `;
+
+  $('#new-ad-camp-btn')?.addEventListener('click', () => {
+    openModal('Create Ad Campaign', `
+      <div class="form-group"><label class="form-label">Campaign Name</label><input class="form-input" id="ad-name" placeholder="e.g., Summer Lunch Special"></div>
+      <div class="form-group"><label class="form-label">Platform</label>
+        <select class="form-select" id="ad-platform"><option value="google_ads">Google Ads</option><option value="meta">Meta (Facebook/Instagram)</option></select>
+      </div>
+      <div class="form-group"><label class="form-label">Objective</label>
+        <select class="form-select" id="ad-objective">
+          <option value="store_visits">Drive Store Visits</option>
+          <option value="online_orders">Online Orders</option>
+          <option value="brand_awareness">Brand Awareness</option>
+          <option value="reservations">Reservations</option>
+          <option value="app_installs">App Installs</option>
+        </select>
+      </div>
+      <div class="form-group"><label class="form-label">Daily Budget ($)</label><input class="form-input" id="ad-budget" type="number" placeholder="50"></div>
+      <div class="form-group"><label class="form-label">Restaurant</label>
+        <select class="form-select" id="ad-restaurant">
+          <option value="">All Locations</option>
+          ${(restaurants || []).map(r => `<option value="${r.id}">${r.name}</option>`).join('')}
+        </select>
+      </div>
+    `, `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button><button class="btn btn-primary" id="ad-save">Create Campaign</button>`);
+    $('#ad-save').onclick = async () => {
+      const name = $('#ad-name').value.trim();
+      if (!name) return toast('Campaign name is required', 'error');
+      await db.insert('ad_campaigns', {
+        name,
+        platform: $('#ad-platform').value,
+        objective: $('#ad-objective').value,
+        daily_budget: parseFloat($('#ad-budget').value) || 0,
+        restaurant_id: $('#ad-restaurant').value || null,
+        status: 'draft',
+      });
+      closeModal();
+      toast('Campaign created', 'success');
+      await logActivity('create_ad_campaign', `Created ad campaign: ${name}`);
+      navigate('ads');
+    };
+  });
+}
+
+async function renderAds_Creatives(container) {
+  const { data: creatives } = await db.select('ad_creatives', { order: { column: 'created_at', ascending: false } });
+  const items = creatives || [];
+  container.innerHTML = `
+    <div class="table-toolbar">
+      <h3 style="margin:0">Ad Creatives</h3>
+      <div style="margin-left:auto"><button class="btn btn-primary btn-sm" id="new-creative-btn"><i data-lucide="plus"></i> Upload Creative</button></div>
+    </div>
+    ${items.length === 0 ? `<div class="empty-state" style="padding:48px;text-align:center">
+      <i data-lucide="image" style="width:48px;height:48px;color:var(--text-muted)"></i>
+      <h4 style="margin:12px 0 4px">No Creatives</h4>
+      <p style="color:var(--text-muted)">Upload ad images and videos for your campaigns.</p>
+    </div>` : `<div class="table-wrapper"><table>
+      <thead><tr><th>Name</th><th>Type</th><th>Format</th><th>Campaign</th><th>Status</th></tr></thead>
+      <tbody>${items.map(c => `<tr>
+        <td><strong>${c.name || '—'}</strong></td>
+        <td>${c.creative_type || '—'}</td>
+        <td>${c.format || '—'}</td>
+        <td>${c.campaign_name || '—'}</td>
+        <td>${badgeHTML(c.status || 'draft')}</td>
+      </tr>`).join('')}</tbody>
+    </table></div>`}
+  `;
+}
+
+async function renderAds_Audiences(container) {
+  const { data: audiences } = await db.select('ad_audiences', { order: { column: 'created_at', ascending: false } });
+  const items = audiences || [];
+  container.innerHTML = `
+    <div class="table-toolbar">
+      <h3 style="margin:0">Audiences</h3>
+      <div style="margin-left:auto"><button class="btn btn-primary btn-sm" id="new-audience-btn"><i data-lucide="plus"></i> Create Audience</button></div>
+    </div>
+    ${items.length === 0 ? `<div class="empty-state" style="padding:48px;text-align:center">
+      <i data-lucide="users" style="width:48px;height:48px;color:var(--text-muted)"></i>
+      <h4 style="margin:12px 0 4px">No Audiences</h4>
+      <p style="color:var(--text-muted)">Create targeting audiences for your ad campaigns.</p>
+    </div>` : `<div class="table-wrapper"><table>
+      <thead><tr><th>Name</th><th>Type</th><th>Size</th><th>Platform</th></tr></thead>
+      <tbody>${items.map(a => `<tr>
+        <td><strong>${a.name || '—'}</strong></td>
+        <td>${a.audience_type || '—'}</td>
+        <td>${(a.estimated_size || 0).toLocaleString()}</td>
+        <td>${badgeHTML(a.platform || '—')}</td>
+      </tr>`).join('')}</tbody>
+    </table></div>`}
+  `;
+}
+
+async function renderAds_Experiments(container) {
+  const { data: experiments } = await db.select('ad_experiments', { order: { column: 'created_at', ascending: false } });
+  const items = experiments || [];
+  container.innerHTML = `
+    <div class="table-toolbar">
+      <h3 style="margin:0">A/B Tests</h3>
+      <div style="margin-left:auto"><button class="btn btn-primary btn-sm" id="new-experiment-btn"><i data-lucide="plus"></i> New Test</button></div>
+    </div>
+    ${items.length === 0 ? `<div class="empty-state" style="padding:48px;text-align:center">
+      <i data-lucide="flask-conical" style="width:48px;height:48px;color:var(--text-muted)"></i>
+      <h4 style="margin:12px 0 4px">No A/B Tests</h4>
+      <p style="color:var(--text-muted)">Run A/B tests to optimize your ad performance.</p>
+    </div>` : `<div class="table-wrapper"><table>
+      <thead><tr><th>Test Name</th><th>Campaign</th><th>Status</th><th>Winner</th><th>Confidence</th></tr></thead>
+      <tbody>${items.map(e => `<tr>
+        <td><strong>${e.name || '—'}</strong></td>
+        <td>${e.campaign_name || '—'}</td>
+        <td>${badgeHTML(e.status || 'draft')}</td>
+        <td>${e.winner || '—'}</td>
+        <td>${e.confidence ? e.confidence + '%' : '—'}</td>
+      </tr>`).join('')}</tbody>
+    </table></div>`}
+  `;
+}
+
+function renderAds_Connections(container, connections) {
+  container.innerHTML = `
+    <h3 style="margin:0 0 16px">Platform Connections</h3>
+    <div class="kpi-grid" style="grid-template-columns:repeat(2,1fr);gap:16px">
+      <div class="kpi-card" style="padding:24px">
+        <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px">
+          <div style="width:40px;height:40px;background:#4285f4;border-radius:8px;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700">G</div>
+          <div><strong>Google Ads</strong><div style="font-size:12px;color:var(--text-muted)">${connections.find(c => c.platform === 'google_ads') ? 'Connected' : 'Not connected'}</div></div>
+        </div>
+        <button class="btn ${connections.find(c => c.platform === 'google_ads') ? 'btn-secondary' : 'btn-primary'} btn-sm" id="connect-google-ads">
+          ${connections.find(c => c.platform === 'google_ads') ? 'Manage' : 'Connect'}
+        </button>
+      </div>
+      <div class="kpi-card" style="padding:24px">
+        <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px">
+          <div style="width:40px;height:40px;background:#1877f2;border-radius:8px;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700">M</div>
+          <div><strong>Meta Ads</strong><div style="font-size:12px;color:var(--text-muted)">${connections.find(c => c.platform === 'meta') ? 'Connected' : 'Not connected'}</div></div>
+        </div>
+        <button class="btn ${connections.find(c => c.platform === 'meta') ? 'btn-secondary' : 'btn-primary'} btn-sm" id="connect-meta-ads">
+          ${connections.find(c => c.platform === 'meta') ? 'Manage' : 'Connect'}
+        </button>
+      </div>
+    </div>
+  `;
+  $('#connect-google-ads')?.addEventListener('click', () => toast('Google Ads OAuth will be configured after deployment', 'info'));
+  $('#connect-meta-ads')?.addEventListener('click', () => toast('Meta Ads OAuth will be configured after deployment', 'info'));
+}
+
+// ============================================
+// PAGE: Competitors
+// ============================================
+async function renderCompetitors(container) {
+  await getEmployees();
+  const [competitorsRes, snapshotsRes, alertsRes] = await Promise.all([
+    db.select('competitors', { order: { column: 'name', ascending: true } }),
+    db.select('competitor_review_snapshots', { order: { column: 'snapshot_date', ascending: false }, limit: 50 }),
+    db.select('competitor_alerts', { order: { column: 'created_at', ascending: false }, limit: 20 }),
+  ]);
+  const competitors = competitorsRes.data || [];
+  const snapshots = snapshotsRes.data || [];
+  const alerts = alertsRes.data || [];
+
+  container.innerHTML = `
+    <h1 class="page-title">Competitors</h1>
+    <p class="page-subtitle">Monitor competitor activity, reviews, and market position</p>
+    <div class="tabs">
+      <button class="tab active" data-tab="comp-profiles">Profiles</button>
+      <button class="tab" data-tab="comp-reviews">Reviews</button>
+      <button class="tab" data-tab="comp-social">Social</button>
+      <button class="tab" data-tab="comp-menu">Menu & Pricing</button>
+      <button class="tab" data-tab="comp-promos">Promotions</button>
+      <button class="tab" data-tab="comp-rankings">Rankings</button>
+      <button class="tab" data-tab="comp-alerts">Alerts</button>
+      <button class="tab" data-tab="comp-benchmark">Benchmarks</button>
+    </div>
+    <div class="tab-content" id="comp-tab-content"></div>
+  `;
+  const tabs = $$('.tab', container);
+  const c = $('#comp-tab-content');
+
+  async function showTab(tab) {
+    tabs.forEach(t => t.classList.toggle('active', t.dataset.tab === tab));
+    showLoading(c);
+    if (tab === 'comp-profiles') renderComp_Profiles(c, competitors);
+    else if (tab === 'comp-reviews') await renderComp_Reviews(c);
+    else if (tab === 'comp-social') await renderComp_Social(c);
+    else if (tab === 'comp-menu') await renderComp_Menu(c);
+    else if (tab === 'comp-promos') await renderComp_Promos(c);
+    else if (tab === 'comp-rankings') await renderComp_Rankings(c);
+    else if (tab === 'comp-alerts') renderComp_Alerts(c, alerts);
+    else if (tab === 'comp-benchmark') await renderComp_Benchmarks(c);
+    lucide.createIcons({ nameAttr: 'data-lucide' });
+  }
+
+  tabs.forEach(t => t.addEventListener('click', () => showTab(t.dataset.tab)));
+  showTab('comp-profiles');
+  lucide.createIcons({ nameAttr: 'data-lucide' });
+}
+
+function renderComp_Profiles(container, competitors) {
+  container.innerHTML = `
+    <div class="table-toolbar">
+      <div class="search-filter"><i data-lucide="search"></i><input type="text" placeholder="Search competitors..." id="comp-filter"></div>
+      <div style="margin-left:auto"><button class="btn btn-primary btn-sm" id="add-competitor-btn"><i data-lucide="plus"></i> Add Competitor</button></div>
+    </div>
+    ${competitors.length === 0 ? `<div class="empty-state" style="padding:48px;text-align:center">
+      <i data-lucide="eye" style="width:48px;height:48px;color:var(--text-muted)"></i>
+      <h4 style="margin:12px 0 4px">No Competitors Tracked</h4>
+      <p style="color:var(--text-muted)">Add competitors to monitor their reviews, social media, and promotions.</p>
+    </div>` : `<div class="brand-grid">${competitors.map(c => `
+      <div class="brand-card" style="cursor:pointer">
+        <div class="brand-card-logo"><span>${(c.name || '').substring(0, 2).toUpperCase()}</span></div>
+        <div class="brand-card-info">
+          <div class="brand-card-name">${c.name}</div>
+          <div class="brand-card-meta">
+            ${c.google_rating ? `<span style="color:var(--warning)">★ ${c.google_rating}</span>` : ''}
+            ${c.cuisine_type ? `<span class="badge badge-accent">${c.cuisine_type}</span>` : ''}
+          </div>
+          <div style="font-size:12px;color:var(--text-muted);margin-top:4px">${c.address || '—'}</div>
+        </div>
+      </div>`).join('')}</div>`}
+  `;
+
+  $('#add-competitor-btn')?.addEventListener('click', () => {
+    openModal('Add Competitor', `
+      <div class="form-group"><label class="form-label">Competitor Name</label><input class="form-input" id="comp-name" placeholder="e.g., Taco Bell"></div>
+      <div class="form-group"><label class="form-label">Google Place ID (optional)</label><input class="form-input" id="comp-place-id" placeholder="ChIJ..."></div>
+      <div class="form-group"><label class="form-label">Address</label><input class="form-input" id="comp-address"></div>
+      <div class="form-group"><label class="form-label">Cuisine Type</label><input class="form-input" id="comp-cuisine" placeholder="e.g., Mexican"></div>
+      <div class="form-group"><label class="form-label">Website</label><input class="form-input" id="comp-website" placeholder="https://..."></div>
+    `, `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button><button class="btn btn-primary" id="comp-save">Add</button>`);
+    $('#comp-save').onclick = async () => {
+      const name = $('#comp-name').value.trim();
+      if (!name) return toast('Name is required', 'error');
+      await db.insert('competitors', {
+        name,
+        google_place_id: $('#comp-place-id').value.trim() || null,
+        address: $('#comp-address').value.trim(),
+        cuisine_type: $('#comp-cuisine').value.trim(),
+        website: $('#comp-website').value.trim(),
+      });
+      closeModal();
+      toast('Competitor added', 'success');
+      await logActivity('add_competitor', `Added competitor: ${name}`);
+      navigate('competitors');
+    };
+  });
+}
+
+async function renderComp_Reviews(container) {
+  const { data: snapshots } = await db.select('competitor_review_snapshots', { order: { column: 'snapshot_date', ascending: false }, limit: 50 });
+  const items = snapshots || [];
+  container.innerHTML = `
+    <h3 style="margin:0 0 16px">Review Monitoring</h3>
+    ${items.length === 0 ? `<div class="empty-state" style="padding:48px;text-align:center"><p style="color:var(--text-muted)">No review snapshots yet. Add competitors and enable daily sync.</p></div>` : `
+    <div class="table-wrapper"><table>
+      <thead><tr><th>Competitor</th><th>Platform</th><th>Rating</th><th>Reviews</th><th>Date</th></tr></thead>
+      <tbody>${items.map(s => `<tr>
+        <td><strong>${s.competitor_name || '—'}</strong></td>
+        <td>${s.platform || '—'}</td>
+        <td style="color:var(--warning)">★ ${s.avg_rating || '—'}</td>
+        <td>${s.total_reviews || 0}</td>
+        <td>${formatDate(s.snapshot_date)}</td>
+      </tr>`).join('')}</tbody>
+    </table></div>`}
+  `;
+}
+
+async function renderComp_Social(container) {
+  const { data: snapshots } = await db.select('competitor_social_snapshots', { order: { column: 'snapshot_date', ascending: false }, limit: 50 });
+  const items = snapshots || [];
+  container.innerHTML = `
+    <h3 style="margin:0 0 16px">Social Media Monitoring</h3>
+    <p style="color:var(--text-muted);font-size:13px;margin-bottom:16px">Track competitor social media presence. Data entered manually or via optional third-party tools.</p>
+    ${items.length === 0 ? `<div class="empty-state" style="padding:48px;text-align:center"><p style="color:var(--text-muted)">No social snapshots yet.</p></div>` : `
+    <div class="table-wrapper"><table>
+      <thead><tr><th>Competitor</th><th>Platform</th><th>Followers</th><th>Posts (30d)</th><th>Engagement</th><th>Date</th></tr></thead>
+      <tbody>${items.map(s => `<tr>
+        <td><strong>${s.competitor_name || '—'}</strong></td>
+        <td>${s.platform || '—'}</td>
+        <td>${(s.followers || 0).toLocaleString()}</td>
+        <td>${s.post_count_30d || 0}</td>
+        <td>${s.avg_engagement_rate ? s.avg_engagement_rate.toFixed(2) + '%' : '—'}</td>
+        <td>${formatDate(s.snapshot_date)}</td>
+      </tr>`).join('')}</tbody>
+    </table></div>`}
+  `;
+}
+
+async function renderComp_Menu(container) {
+  const { data: items } = await db.select('competitor_menu_items', { order: { column: 'competitor_name', ascending: true } });
+  const menuItems = items || [];
+  container.innerHTML = `
+    <h3 style="margin:0 0 16px">Menu & Pricing</h3>
+    ${menuItems.length === 0 ? `<div class="empty-state" style="padding:48px;text-align:center"><p style="color:var(--text-muted)">No menu data tracked yet.</p></div>` : `
+    <div class="table-wrapper"><table>
+      <thead><tr><th>Competitor</th><th>Item</th><th>Category</th><th>Price</th><th>Last Updated</th></tr></thead>
+      <tbody>${menuItems.map(m => `<tr>
+        <td><strong>${m.competitor_name || '—'}</strong></td>
+        <td>${m.item_name || '—'}</td>
+        <td>${m.category || '—'}</td>
+        <td>$${(m.price || 0).toFixed(2)}</td>
+        <td>${formatDate(m.updated_at)}</td>
+      </tr>`).join('')}</tbody>
+    </table></div>`}
+  `;
+}
+
+async function renderComp_Promos(container) {
+  const { data: promos } = await db.select('competitor_promotions', { order: { column: 'discovered_at', ascending: false } });
+  const items = promos || [];
+  container.innerHTML = `
+    <h3 style="margin:0 0 16px">Competitor Promotions</h3>
+    ${items.length === 0 ? `<div class="empty-state" style="padding:48px;text-align:center"><p style="color:var(--text-muted)">No competitor promotions tracked yet.</p></div>` : `
+    <div class="table-wrapper"><table>
+      <thead><tr><th>Competitor</th><th>Promotion</th><th>Type</th><th>Platform</th><th>Discovered</th></tr></thead>
+      <tbody>${items.map(p => `<tr>
+        <td><strong>${p.competitor_name || '—'}</strong></td>
+        <td>${p.description || '—'}</td>
+        <td>${badgeHTML(p.promo_type || '—')}</td>
+        <td>${p.source_platform || '—'}</td>
+        <td>${formatDate(p.discovered_at)}</td>
+      </tr>`).join('')}</tbody>
+    </table></div>`}
+  `;
+}
+
+async function renderComp_Rankings(container) {
+  const { data: rankings } = await db.select('local_search_rankings', { order: { column: 'checked_at', ascending: false }, limit: 50 });
+  const items = rankings || [];
+  container.innerHTML = `
+    <h3 style="margin:0 0 16px">Local Search Rankings</h3>
+    ${items.length === 0 ? `<div class="empty-state" style="padding:48px;text-align:center"><p style="color:var(--text-muted)">No ranking data yet. Connect SEO tracking first.</p></div>` : `
+    <div class="table-wrapper"><table>
+      <thead><tr><th>Keyword</th><th>Your Rank</th><th>Competitor</th><th>Their Rank</th><th>Date</th></tr></thead>
+      <tbody>${items.map(r => `<tr>
+        <td><strong>${r.keyword || '—'}</strong></td>
+        <td style="font-weight:600;color:${(r.your_rank || 99) <= 3 ? 'var(--success)' : 'var(--text)'}">${r.your_rank || '—'}</td>
+        <td>${r.competitor_name || '—'}</td>
+        <td>${r.competitor_rank || '—'}</td>
+        <td>${formatDate(r.checked_at)}</td>
+      </tr>`).join('')}</tbody>
+    </table></div>`}
+  `;
+}
+
+function renderComp_Alerts(container, alerts) {
+  container.innerHTML = `
+    <h3 style="margin:0 0 16px">Competitor Alerts</h3>
+    ${alerts.length === 0 ? `<div class="empty-state" style="padding:48px;text-align:center"><p style="color:var(--text-muted)">No alerts yet. Alerts trigger when competitors get rating changes, new promotions, or significant review activity.</p></div>` : `
+    <div class="table-wrapper"><table>
+      <thead><tr><th>Alert</th><th>Competitor</th><th>Type</th><th>Date</th></tr></thead>
+      <tbody>${alerts.map(a => `<tr>
+        <td><strong>${a.message || '—'}</strong></td>
+        <td>${a.competitor_name || '—'}</td>
+        <td>${badgeHTML(a.alert_type || '—')}</td>
+        <td>${formatDate(a.created_at)}</td>
+      </tr>`).join('')}</tbody>
+    </table></div>`}
+  `;
+}
+
+async function renderComp_Benchmarks(container) {
+  const { data: benchmarks } = await db.select('competitor_benchmarks');
+  const items = benchmarks || [];
+  container.innerHTML = `
+    <h3 style="margin:0 0 16px">Benchmarking Dashboard</h3>
+    ${items.length === 0 ? `<div class="empty-state" style="padding:48px;text-align:center">
+      <i data-lucide="bar-chart-3" style="width:48px;height:48px;color:var(--text-muted)"></i>
+      <h4 style="margin:12px 0 4px">No Benchmark Data</h4>
+      <p style="color:var(--text-muted)">Add competitors and enable syncing to see benchmark comparisons.</p>
+    </div>` : `<div class="table-wrapper"><table>
+      <thead><tr><th>Metric</th><th>You</th><th>Avg Competitor</th><th>Best Competitor</th><th>Gap</th></tr></thead>
+      <tbody>${items.map(b => `<tr>
+        <td><strong>${b.metric_name || '—'}</strong></td>
+        <td>${b.your_value || '—'}</td>
+        <td>${b.avg_competitor_value || '—'}</td>
+        <td>${b.best_competitor_value || '—'} <span style="font-size:11px;color:var(--text-muted)">(${b.best_competitor_name || ''})</span></td>
+        <td style="color:${(b.gap || 0) >= 0 ? 'var(--success)' : 'var(--danger)'}">${b.gap > 0 ? '+' : ''}${b.gap || '0'}</td>
+      </tr>`).join('')}</tbody>
+    </table></div>`}
+  `;
+}
+
+// ============================================
+// PAGE: Loyalty & Promos
+// ============================================
+async function renderLoyalty(container) {
+  await getEmployees();
+  const [promosRes, membersRes, programsRes, redemptionsRes] = await Promise.all([
+    db.select('promotions', { order: { column: 'created_at', ascending: false } }),
+    db.select('loyalty_members', { order: { column: 'created_at', ascending: false } }),
+    db.select('loyalty_programs'),
+    db.select('promotion_redemptions', { order: { column: 'redeemed_at', ascending: false }, limit: 50 }),
+  ]);
+  const promos = promosRes.data || [];
+  const members = membersRes.data || [];
+  const programs = programsRes.data || [];
+  const redemptions = redemptionsRes.data || [];
+
+  container.innerHTML = `
+    <h1 class="page-title">Loyalty & Promos</h1>
+    <p class="page-subtitle">Manage promotions, loyalty programs, and customer rewards</p>
+    <div class="tabs">
+      <button class="tab active" data-tab="loy-promos">Promotions</button>
+      <button class="tab" data-tab="loy-redemptions">Redemptions</button>
+      <button class="tab" data-tab="loy-program">Program</button>
+      <button class="tab" data-tab="loy-members">Members</button>
+      <button class="tab" data-tab="loy-rewards">Rewards</button>
+      <button class="tab" data-tab="loy-tiers">Tiers</button>
+      <button class="tab" data-tab="loy-triggers">Triggers</button>
+      <button class="tab" data-tab="loy-analytics">Analytics</button>
+    </div>
+    <div class="tab-content" id="loy-tab-content"></div>
+  `;
+  const tabs = $$('.tab', container);
+  const c = $('#loy-tab-content');
+
+  async function showTab(tab) {
+    tabs.forEach(t => t.classList.toggle('active', t.dataset.tab === tab));
+    showLoading(c);
+    if (tab === 'loy-promos') renderLoy_Promos(c, promos);
+    else if (tab === 'loy-redemptions') renderLoy_Redemptions(c, redemptions);
+    else if (tab === 'loy-program') renderLoy_Program(c, programs);
+    else if (tab === 'loy-members') renderLoy_Members(c, members);
+    else if (tab === 'loy-rewards') await renderLoy_Rewards(c);
+    else if (tab === 'loy-tiers') await renderLoy_Tiers(c);
+    else if (tab === 'loy-triggers') await renderLoy_Triggers(c);
+    else if (tab === 'loy-analytics') renderLoy_Analytics(c, { promos, members, redemptions });
+    lucide.createIcons({ nameAttr: 'data-lucide' });
+  }
+
+  tabs.forEach(t => t.addEventListener('click', () => showTab(t.dataset.tab)));
+  showTab('loy-promos');
+  lucide.createIcons({ nameAttr: 'data-lucide' });
+}
+
+function renderLoy_Promos(container, promos) {
+  const active = promos.filter(p => p.status === 'active');
+  const expired = promos.filter(p => p.status === 'expired');
+
+  container.innerHTML = `
+    <div class="kpi-grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:20px">
+      <div class="kpi-card"><div class="kpi-label">Total Promos</div><div class="kpi-value">${promos.length}</div></div>
+      <div class="kpi-card"><div class="kpi-label">Active</div><div class="kpi-value" style="color:var(--success)">${active.length}</div></div>
+      <div class="kpi-card"><div class="kpi-label">Expired</div><div class="kpi-value" style="color:var(--text-muted)">${expired.length}</div></div>
+      <div class="kpi-card"><div class="kpi-label">Total Redemptions</div><div class="kpi-value" style="color:var(--accent)">${promos.reduce((s, p) => s + (p.redemption_count || 0), 0)}</div></div>
+    </div>
+    <div class="table-toolbar">
+      <div class="search-filter"><i data-lucide="search"></i><input type="text" placeholder="Filter promos..." id="promo-filter"></div>
+      <div style="margin-left:auto"><button class="btn btn-primary btn-sm" id="new-promo-btn"><i data-lucide="plus"></i> Create Promotion</button></div>
+    </div>
+    ${promos.length === 0 ? `<div class="empty-state" style="padding:48px;text-align:center">
+      <i data-lucide="tag" style="width:48px;height:48px;color:var(--text-muted)"></i>
+      <h4 style="margin:12px 0 4px">No Promotions</h4>
+      <p style="color:var(--text-muted)">Create your first promotion to drive customer engagement.</p>
+    </div>` : `<div class="table-wrapper"><table>
+      <thead><tr><th>Promotion</th><th>Type</th><th>Value</th><th>Status</th><th>Redemptions</th><th>Expires</th><th>Actions</th></tr></thead>
+      <tbody>${promos.map(p => `<tr>
+        <td><strong>${p.name || '—'}</strong></td>
+        <td>${badgeHTML(p.promo_type || '—')}</td>
+        <td>${p.discount_value ? (p.promo_type === 'percentage_off' ? p.discount_value + '%' : '$' + p.discount_value) : '—'}</td>
+        <td>${badgeHTML(p.status || 'draft')}</td>
+        <td>${p.redemption_count || 0}${p.max_redemptions ? '/' + p.max_redemptions : ''}</td>
+        <td>${formatDate(p.expires_at)}</td>
+        <td><button class="btn btn-secondary btn-sm">Edit</button></td>
+      </tr>`).join('')}</tbody>
+    </table></div>`}
+  `;
+
+  $('#new-promo-btn')?.addEventListener('click', () => {
+    openModal('Create Promotion', `
+      <div class="form-group"><label class="form-label">Promotion Name</label><input class="form-input" id="promo-name" placeholder="e.g., Happy Hour 20% Off"></div>
+      <div class="form-group"><label class="form-label">Type</label>
+        <select class="form-select" id="promo-type">
+          <option value="percentage_off">Percentage Off</option>
+          <option value="dollar_off">Dollar Off</option>
+          <option value="bogo">Buy One Get One</option>
+          <option value="free_item">Free Item</option>
+          <option value="happy_hour">Happy Hour</option>
+          <option value="custom">Custom</option>
+        </select>
+      </div>
+      <div class="form-group"><label class="form-label">Discount Value</label><input class="form-input" id="promo-value" type="number" placeholder="e.g., 20"></div>
+      <div class="form-group"><label class="form-label">Promo Code (optional)</label><input class="form-input" id="promo-code" placeholder="e.g., HAPPY20"></div>
+      <div class="form-group"><label class="form-label">Max Redemptions (0 = unlimited)</label><input class="form-input" id="promo-max" type="number" value="0"></div>
+      <div class="form-group"><label class="form-label">Expires</label><input class="form-input" id="promo-expires" type="date"></div>
+      <div class="form-group"><label class="form-label">Description</label><textarea class="form-input" id="promo-desc" rows="3"></textarea></div>
+    `, `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button><button class="btn btn-primary" id="promo-save">Create</button>`);
+    $('#promo-save').onclick = async () => {
+      const name = $('#promo-name').value.trim();
+      if (!name) return toast('Name is required', 'error');
+      const code = $('#promo-code').value.trim().toUpperCase();
+      await db.insert('promotions', {
+        name,
+        promo_type: $('#promo-type').value,
+        discount_value: parseFloat($('#promo-value').value) || 0,
+        code: code || null,
+        max_redemptions: parseInt($('#promo-max').value) || null,
+        expires_at: $('#promo-expires').value || null,
+        description: $('#promo-desc').value.trim(),
+        status: 'active',
+      });
+      // Also create promo code entry if code was provided
+      if (code) {
+        await db.insert('promotion_codes', { code, promotion_name: name, status: 'active' });
+      }
+      closeModal();
+      toast('Promotion created', 'success');
+      await logActivity('create_promotion', `Created promotion: ${name}`);
+      navigate('loyalty');
+    };
+  });
+}
+
+function renderLoy_Redemptions(container, redemptions) {
+  container.innerHTML = `
+    <h3 style="margin:0 0 16px">Recent Redemptions</h3>
+    ${redemptions.length === 0 ? `<div class="empty-state" style="padding:48px;text-align:center"><p style="color:var(--text-muted)">No redemptions yet.</p></div>` : `
+    <div class="table-wrapper"><table>
+      <thead><tr><th>Code</th><th>Promotion</th><th>Customer</th><th>Location</th><th>Date</th></tr></thead>
+      <tbody>${redemptions.map(r => `<tr>
+        <td><code>${r.code || '—'}</code></td>
+        <td>${r.promotion_name || '—'}</td>
+        <td>${r.customer_name || r.customer_email || '—'}</td>
+        <td>${r.location_name || '—'}</td>
+        <td>${formatDateTime(r.redeemed_at)}</td>
+      </tr>`).join('')}</tbody>
+    </table></div>`}
+  `;
+}
+
+function renderLoy_Program(container, programs) {
+  container.innerHTML = `
+    <h3 style="margin:0 0 16px">Loyalty Programs</h3>
+    <div class="table-toolbar"><div style="margin-left:auto"><button class="btn btn-primary btn-sm" id="new-program-btn"><i data-lucide="plus"></i> Create Program</button></div></div>
+    ${programs.length === 0 ? `<div class="empty-state" style="padding:48px;text-align:center">
+      <i data-lucide="crown" style="width:48px;height:48px;color:var(--text-muted)"></i>
+      <h4 style="margin:12px 0 4px">No Loyalty Program</h4>
+      <p style="color:var(--text-muted)">Create a loyalty program to reward repeat customers.</p>
+    </div>` : `<div class="brand-grid">${programs.map(p => `
+      <div class="kpi-card" style="padding:20px">
+        <h4 style="margin:0 0 8px">${p.name || 'Loyalty Program'}</h4>
+        <div style="font-size:13px;color:var(--text-muted);margin-bottom:12px">${p.program_type || 'points_based'} program</div>
+        <div style="display:flex;gap:16px;font-size:13px">
+          <div><strong>${p.member_count || 0}</strong> members</div>
+          <div><strong>${p.points_per_dollar || 1}</strong> pts/$</div>
+          <div>${badgeHTML(p.status || 'active')}</div>
+        </div>
+      </div>`).join('')}</div>`}
+  `;
+
+  $('#new-program-btn')?.addEventListener('click', () => {
+    openModal('Create Loyalty Program', `
+      <div class="form-group"><label class="form-label">Program Name</label><input class="form-input" id="prog-name" placeholder="e.g., Rewards Club"></div>
+      <div class="form-group"><label class="form-label">Type</label>
+        <select class="form-select" id="prog-type">
+          <option value="points_based">Points Based</option>
+          <option value="visit_based">Visit Based</option>
+          <option value="spend_based">Spend Based</option>
+          <option value="hybrid">Hybrid</option>
+        </select>
+      </div>
+      <div class="form-group"><label class="form-label">Points per Dollar</label><input class="form-input" id="prog-ppp" type="number" value="1"></div>
+    `, `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button><button class="btn btn-primary" id="prog-save">Create</button>`);
+    $('#prog-save').onclick = async () => {
+      const name = $('#prog-name').value.trim();
+      if (!name) return toast('Name is required', 'error');
+      await db.insert('loyalty_programs', {
+        name,
+        program_type: $('#prog-type').value,
+        points_per_dollar: parseInt($('#prog-ppp').value) || 1,
+        status: 'active',
+      });
+      closeModal();
+      toast('Loyalty program created', 'success');
+      await logActivity('create_loyalty_program', `Created: ${name}`);
+      navigate('loyalty');
+    };
+  });
+}
+
+function renderLoy_Members(container, members) {
+  container.innerHTML = `
+    <div class="kpi-grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:20px">
+      <div class="kpi-card"><div class="kpi-label">Total Members</div><div class="kpi-value">${members.length}</div></div>
+      <div class="kpi-card"><div class="kpi-label">Active</div><div class="kpi-value" style="color:var(--success)">${members.filter(m => m.status === 'active').length}</div></div>
+      <div class="kpi-card"><div class="kpi-label">Total Points Issued</div><div class="kpi-value" style="color:var(--accent)">${members.reduce((s, m) => s + (m.total_points_earned || 0), 0).toLocaleString()}</div></div>
+      <div class="kpi-card"><div class="kpi-label">Avg Visits</div><div class="kpi-value">${members.length ? (members.reduce((s, m) => s + (m.visit_count || 0), 0) / members.length).toFixed(1) : 0}</div></div>
+    </div>
+    <div class="table-toolbar">
+      <div class="search-filter"><i data-lucide="search"></i><input type="text" placeholder="Search members..." id="member-filter"></div>
+      <div style="margin-left:auto"><button class="btn btn-primary btn-sm" id="add-member-btn"><i data-lucide="plus"></i> Enroll Member</button></div>
+    </div>
+    ${members.length === 0 ? `<div class="empty-state" style="padding:48px;text-align:center"><p style="color:var(--text-muted)">No loyalty members yet.</p></div>` : `
+    <div class="table-wrapper"><table>
+      <thead><tr><th>Name</th><th>Email</th><th>Tier</th><th>Points</th><th>Visits</th><th>Joined</th></tr></thead>
+      <tbody>${members.map(m => `<tr>
+        <td><strong>${m.name || '—'}</strong></td>
+        <td>${m.email || '—'}</td>
+        <td>${badgeHTML(m.tier || 'member')}</td>
+        <td>${(m.current_points || 0).toLocaleString()}</td>
+        <td>${m.visit_count || 0}</td>
+        <td>${formatDate(m.created_at)}</td>
+      </tr>`).join('')}</tbody>
+    </table></div>`}
+  `;
+
+  $('#add-member-btn')?.addEventListener('click', () => {
+    openModal('Enroll Member', `
+      <div class="form-group"><label class="form-label">Name</label><input class="form-input" id="mem-name"></div>
+      <div class="form-group"><label class="form-label">Email</label><input class="form-input" id="mem-email" type="email"></div>
+      <div class="form-group"><label class="form-label">Phone</label><input class="form-input" id="mem-phone"></div>
+    `, `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button><button class="btn btn-primary" id="mem-save">Enroll</button>`);
+    $('#mem-save').onclick = async () => {
+      const name = $('#mem-name').value.trim();
+      const email = $('#mem-email').value.trim();
+      if (!name || !email) return toast('Name and email required', 'error');
+      await db.insert('loyalty_members', {
+        name, email,
+        phone: $('#mem-phone').value.trim(),
+        tier: 'member',
+        status: 'active',
+        current_points: 0,
+        total_points_earned: 0,
+        visit_count: 0,
+      });
+      closeModal();
+      toast('Member enrolled', 'success');
+      await logActivity('enroll_member', `Enrolled: ${name}`);
+      navigate('loyalty');
+    };
+  });
+}
+
+async function renderLoy_Rewards(container) {
+  const { data: rewards } = await db.select('loyalty_rewards', { order: { column: 'points_required', ascending: true } });
+  const items = rewards || [];
+  container.innerHTML = `
+    <div class="table-toolbar">
+      <h3 style="margin:0">Rewards Catalog</h3>
+      <div style="margin-left:auto"><button class="btn btn-primary btn-sm" id="add-reward-btn"><i data-lucide="plus"></i> Add Reward</button></div>
+    </div>
+    ${items.length === 0 ? `<div class="empty-state" style="padding:48px;text-align:center"><p style="color:var(--text-muted)">No rewards configured yet.</p></div>` : `
+    <div class="table-wrapper"><table>
+      <thead><tr><th>Reward</th><th>Points Required</th><th>Type</th><th>Status</th></tr></thead>
+      <tbody>${items.map(r => `<tr>
+        <td><strong>${r.name || '—'}</strong></td>
+        <td>${(r.points_required || 0).toLocaleString()} pts</td>
+        <td>${r.reward_type || '—'}</td>
+        <td>${badgeHTML(r.status || 'active')}</td>
+      </tr>`).join('')}</tbody>
+    </table></div>`}
+  `;
+}
+
+async function renderLoy_Tiers(container) {
+  const { data: tiers } = await db.select('loyalty_tiers', { order: { column: 'min_points', ascending: true } });
+  const items = tiers || [];
+  container.innerHTML = `
+    <div class="table-toolbar">
+      <h3 style="margin:0">Tier System</h3>
+      <div style="margin-left:auto"><button class="btn btn-primary btn-sm" id="add-tier-btn"><i data-lucide="plus"></i> Add Tier</button></div>
+    </div>
+    ${items.length === 0 ? `<div class="empty-state" style="padding:48px;text-align:center">
+      <p style="color:var(--text-muted)">No tiers configured. Default 4-tier system: Member → Silver → Gold → Platinum.</p>
+      <button class="btn btn-primary" id="setup-tiers-btn"><i data-lucide="sparkles"></i> Set Up Default Tiers</button>
+    </div>` : `
+    <div class="brand-grid">${items.map(t => `
+      <div class="kpi-card" style="padding:20px;border-left:4px solid ${t.color || 'var(--accent)'}">
+        <h4 style="margin:0 0 8px">${t.name || '—'}</h4>
+        <div style="font-size:13px;color:var(--text-muted)">Min: ${(t.min_points || 0).toLocaleString()} pts</div>
+        <div style="font-size:13px;color:var(--text-muted)">Maintain: ${(t.maintain_points || 0).toLocaleString()} pts/year</div>
+        <div style="font-size:13px;margin-top:8px">${t.benefits || '—'}</div>
+      </div>`).join('')}</div>`}
+  `;
+
+  $('#setup-tiers-btn')?.addEventListener('click', async () => {
+    const defaultTiers = [
+      { name: 'Member', min_points: 0, maintain_points: 0, color: '#6b7280', benefits: 'Earn points on every visit', sort_order: 1 },
+      { name: 'Silver', min_points: 500, maintain_points: 300, color: '#94a3b8', benefits: '5% bonus points, birthday reward', sort_order: 2 },
+      { name: 'Gold', min_points: 1500, maintain_points: 1000, color: '#f59e0b', benefits: '10% bonus, priority seating, exclusive events', sort_order: 3 },
+      { name: 'Platinum', min_points: 5000, maintain_points: 3000, color: '#8b5cf6', benefits: '15% bonus, free delivery, VIP events, complimentary appetizer', sort_order: 4 },
+    ];
+    for (const tier of defaultTiers) {
+      await db.insert('loyalty_tiers', tier);
+    }
+    toast('Default tiers created', 'success');
+    navigate('loyalty');
+  });
+}
+
+async function renderLoy_Triggers(container) {
+  const { data: triggers } = await db.select('automated_triggers', { order: { column: 'created_at', ascending: false } });
+  const items = triggers || [];
+  container.innerHTML = `
+    <div class="table-toolbar">
+      <h3 style="margin:0">Automated Triggers</h3>
+      <div style="margin-left:auto"><button class="btn btn-primary btn-sm" id="add-trigger-btn"><i data-lucide="plus"></i> Add Trigger</button></div>
+    </div>
+    <p style="color:var(--text-muted);font-size:13px;margin-bottom:16px">Automatically send rewards or messages based on customer events.</p>
+    ${items.length === 0 ? `<div class="empty-state" style="padding:48px;text-align:center">
+      <p style="color:var(--text-muted)">No triggers configured. Set up automated birthday rewards, win-back campaigns, and more.</p>
+    </div>` : `
+    <div class="table-wrapper"><table>
+      <thead><tr><th>Trigger</th><th>Event</th><th>Action</th><th>Status</th><th>Times Fired</th></tr></thead>
+      <tbody>${items.map(t => `<tr>
+        <td><strong>${t.name || '—'}</strong></td>
+        <td>${t.trigger_event || '—'}</td>
+        <td>${t.action_type || '—'}</td>
+        <td>${badgeHTML(t.status || 'active')}</td>
+        <td>${t.fire_count || 0}</td>
+      </tr>`).join('')}</tbody>
+    </table></div>`}
+  `;
+
+  $('#add-trigger-btn')?.addEventListener('click', () => {
+    openModal('Add Automated Trigger', `
+      <div class="form-group"><label class="form-label">Trigger Name</label><input class="form-input" id="trig-name" placeholder="e.g., Birthday Reward"></div>
+      <div class="form-group"><label class="form-label">Event</label>
+        <select class="form-select" id="trig-event">
+          <option value="birthday">Birthday</option>
+          <option value="anniversary">Membership Anniversary</option>
+          <option value="inactivity_30d">Inactive 30 Days</option>
+          <option value="inactivity_60d">Inactive 60 Days</option>
+          <option value="tier_upgrade">Tier Upgrade</option>
+          <option value="milestone_visits">Visit Milestone</option>
+          <option value="milestone_points">Points Milestone</option>
+        </select>
+      </div>
+      <div class="form-group"><label class="form-label">Action</label>
+        <select class="form-select" id="trig-action">
+          <option value="send_promo_code">Send Promo Code</option>
+          <option value="add_bonus_points">Add Bonus Points</option>
+          <option value="send_sms">Send SMS</option>
+          <option value="send_email">Send Email</option>
+        </select>
+      </div>
+      <div class="form-group"><label class="form-label">Details</label><textarea class="form-input" id="trig-details" rows="2" placeholder="e.g., 20% off code, 500 bonus points..."></textarea></div>
+    `, `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button><button class="btn btn-primary" id="trig-save">Create</button>`);
+    $('#trig-save').onclick = async () => {
+      const name = $('#trig-name').value.trim();
+      if (!name) return toast('Name is required', 'error');
+      await db.insert('automated_triggers', {
+        name,
+        trigger_event: $('#trig-event').value,
+        action_type: $('#trig-action').value,
+        action_details: $('#trig-details').value.trim(),
+        status: 'active',
+        fire_count: 0,
+      });
+      closeModal();
+      toast('Trigger created', 'success');
+      await logActivity('create_trigger', `Created trigger: ${name}`);
+      navigate('loyalty');
+    };
+  });
+}
+
+function renderLoy_Analytics(container, { promos, members, redemptions }) {
+  const totalRedemptions = redemptions.length;
+  const totalRevenue = redemptions.reduce((s, r) => s + (r.order_value || 0), 0);
+  const avgOrder = totalRedemptions > 0 ? (totalRevenue / totalRedemptions).toFixed(2) : '0';
+
+  container.innerHTML = `
+    <h3 style="margin:0 0 16px">Loyalty & Promo Analytics</h3>
+    <div class="kpi-grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:20px">
+      <div class="kpi-card"><div class="kpi-label">Total Members</div><div class="kpi-value">${members.length}</div></div>
+      <div class="kpi-card"><div class="kpi-label">Active Promos</div><div class="kpi-value" style="color:var(--success)">${promos.filter(p => p.status === 'active').length}</div></div>
+      <div class="kpi-card"><div class="kpi-label">Redemptions (30d)</div><div class="kpi-value" style="color:var(--accent)">${totalRedemptions}</div></div>
+      <div class="kpi-card"><div class="kpi-label">Avg Order w/ Promo</div><div class="kpi-value">$${avgOrder}</div></div>
+    </div>
+    <div class="kpi-grid" style="grid-template-columns:repeat(2,1fr)">
+      <div class="kpi-card" style="padding:20px">
+        <h4 style="margin:0 0 12px">Member Tier Distribution</h4>
+        ${members.length === 0 ? '<p style="color:var(--text-muted)">No members yet</p>' : `
+        <div>${['member', 'silver', 'gold', 'platinum'].map(tier => {
+          const count = members.filter(m => (m.tier || 'member') === tier).length;
+          const pct = members.length > 0 ? ((count / members.length) * 100).toFixed(0) : 0;
+          return `<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+            <span style="width:70px;font-size:13px;text-transform:capitalize">${tier}</span>
+            <div style="flex:1;background:var(--bg-tertiary);border-radius:4px;height:20px;overflow:hidden">
+              <div style="width:${pct}%;height:100%;background:var(--accent);border-radius:4px"></div>
+            </div>
+            <span style="font-size:13px;width:50px;text-align:right">${count} (${pct}%)</span>
+          </div>`;
+        }).join('')}</div>`}
+      </div>
+      <div class="kpi-card" style="padding:20px">
+        <h4 style="margin:0 0 12px">Top Promotions</h4>
+        ${promos.length === 0 ? '<p style="color:var(--text-muted)">No promotions yet</p>' : `
+        <div>${promos.sort((a, b) => (b.redemption_count || 0) - (a.redemption_count || 0)).slice(0, 5).map(p => `
+          <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border)">
+            <span style="font-size:13px">${p.name}</span>
+            <span style="font-size:13px;font-weight:600">${p.redemption_count || 0} uses</span>
+          </div>`).join('')}</div>`}
+      </div>
+    </div>
+  `;
 }
 
 // ============================================
