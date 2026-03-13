@@ -4,7 +4,7 @@
     { "source": "/(.*)", "destination": "/public/$1" }
   ],
   "crons": [
-    { "path": "/api/seo-rankings", "schedule": "0 6 * * *" },
+    { "path": "/api/seo", "schedule": "0 6 * * *" },
     { "path": "/api/ads-sync", "schedule": "0 5 * * *" },
     { "path": "/api/competitors-sync", "schedule": "0 4 * * *" },
     { "path": "/api/loyalty-cron", "schedule": "0 3 * * *" }

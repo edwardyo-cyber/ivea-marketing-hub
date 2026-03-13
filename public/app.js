@@ -4459,10 +4459,10 @@ async function renderSEO_Audit(container) {
       toast('Running SEO audit...', 'info');
       closeModal();
       try {
-        const resp = await fetch('/api/seo-audit', {
+        const resp = await fetch('/api/seo', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ url, location_name: $('#audit-loc').value.trim() }),
+          body: JSON.stringify({ action: 'audit', page_url: url, restaurant_id: $('#audit-loc').value.trim() }),
         });
         if (resp.ok) { toast('Audit complete', 'success'); navigate('seo'); }
         else toast('Audit failed — check API configuration', 'error');
