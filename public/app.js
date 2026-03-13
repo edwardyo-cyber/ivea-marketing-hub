@@ -1283,8 +1283,8 @@ async function renderInfluencers(container) {
       <td>${i.handle ? `<a href="${socialProfileUrl(i.platform, i.handle)}" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:none">${i.handle}</a>` : '—'}</td>
       <td>${i.platform || '—'}</td>
       <td>${i.followers?.toLocaleString() || '—'}</td>
-      <td>${i.engagement_rate != null ? i.engagement_rate + '%' : '—'}</td>
-      <td>${i.rate || '—'}</td>
+      <td>${i.location || '—'}</td>
+      <td>${badgeHTML(i.category || '—')}</td>
       <td>${badgeHTML(i.pipeline_stage)}</td>
       <td>${employeeName(i.contact_owner)}</td>
       <td>${formatDate(i.last_contacted)}</td>
@@ -1324,9 +1324,9 @@ async function renderInfluencers(container) {
             <th data-key="handle">Handle</th>
             <th data-key="platform">Platform</th>
             <th data-key="followers">Followers</th>
-            <th data-key="engagement_rate">Engagement</th>
-            <th data-key="rate">Rate</th>
-            <th data-key="pipeline_stage">Stage</th>
+            <th data-key="location">Location</th>
+            <th data-key="category">Type</th>
+            <th data-key="pipeline_stage">Relationship</th>
             <th>Owner</th>
             <th data-key="last_contacted">Last Contact</th>
             <th>Actions</th>
@@ -1417,7 +1417,7 @@ window.editInfluencer = async function(id) {
           ${['Instagram','TikTok','YouTube','Twitter','Facebook','LinkedIn'].map(p => `<option ${inf.platform === p ? 'selected' : ''}>${p}</option>`).join('')}
         </select>
       </div>
-      <div class="form-group"><label class="form-label">Pipeline Stage</label>
+      <div class="form-group"><label class="form-label">Relationship</label>
         <select class="form-select" id="inf-stage">
           ${stages.map(s => `<option value="${s}" ${inf.pipeline_stage === s ? 'selected' : ''}>${s}</option>`).join('')}
         </select>
@@ -1429,7 +1429,11 @@ window.editInfluencer = async function(id) {
     </div>
     <div class="form-row">
       <div class="form-group"><label class="form-label">Rate ($)</label><input class="form-input" type="number" id="inf-rate" value="${inf.rate || ''}"></div>
-      <div class="form-group"><label class="form-label">Category</label><input class="form-input" id="inf-category" value="${inf.category || ''}"></div>
+      <div class="form-group"><label class="form-label">Type</label>
+        <select class="form-select" id="inf-category">
+          ${['food','lifestyle','beauty','fitness','fashion','travel','tech','parenting','health','music','art','other'].map(c => `<option value="${c}" ${inf.category === c ? 'selected' : ''}>${c.charAt(0).toUpperCase() + c.slice(1)}</option>`).join('')}
+        </select>
+      </div>
     </div>
     <div class="form-row">
       <div class="form-group"><label class="form-label">Email</label><input class="form-input" id="inf-email" value="${inf.email || ''}"></div>
