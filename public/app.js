@@ -1285,8 +1285,8 @@ async function renderInfluencers(container) {
       <td>${i.followers?.toLocaleString() || '—'}</td>
       <td>${i.location || '—'}</td>
       <td>${badgeHTML(i.category || '—')}</td>
+      <td>${i.email ? `<a href="mailto:${i.email}" style="color:var(--accent);text-decoration:none">${i.email}</a>` : '—'}</td>
       <td>${badgeHTML(i.pipeline_stage)}</td>
-      <td>${employeeName(i.contact_owner)}</td>
       <td>${formatDate(i.last_contacted)}</td>
       <td class="table-actions">
         <button class="btn-icon btn-ghost" onclick="editInfluencer('${i.id}')"><i data-lucide="edit-2"></i></button>
@@ -1326,8 +1326,8 @@ async function renderInfluencers(container) {
             <th data-key="followers">Followers</th>
             <th data-key="location">Location</th>
             <th data-key="category">Type</th>
+            <th data-key="email">Email</th>
             <th data-key="pipeline_stage">Relationship</th>
-            <th>Owner</th>
             <th data-key="last_contacted">Last Contact</th>
             <th>Actions</th>
           </tr></thead>
