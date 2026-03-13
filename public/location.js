@@ -133,7 +133,7 @@ async function loadRestaurantAndShow() {
   showApp();
 }
 
-// --- Sidebar Nav (identical to main hub) ---
+// --- Sidebar Nav (location-level: subset of main hub) ---
 const NAV_ITEMS = [
   { section: null, items: [
     { id: 'dashboard', icon: 'layout-dashboard', label: 'Dashboard' },
@@ -144,14 +144,9 @@ const NAV_ITEMS = [
     { id: 'calendar', icon: 'calendar', label: 'Unified Calendar' },
   ]},
   { section: 'Outreach', items: [
-    { id: 'influencers', icon: 'users', label: 'Influencers' },
     { id: 'campaigns', icon: 'megaphone', label: 'Campaigns' },
-    { id: 'media', icon: 'newspaper', label: 'Local Media' },
-    { id: 'email-sms', icon: 'mail', label: 'Email & SMS' },
   ]},
   { section: 'Communications', items: [
-    { id: 'inbox', icon: 'inbox', label: 'Inbox' },
-    { id: 'text-messages', icon: 'smartphone', label: 'Text Messages' },
     { id: 'reviews', icon: 'message-square', label: 'Reviews' },
   ]},
   { section: 'Marketing', items: [
@@ -165,7 +160,6 @@ const NAV_ITEMS = [
     { id: 'social-accounts', icon: 'share-2', label: 'Social Accounts' },
   ]},
   { section: 'Management', items: [
-    { id: 'team', icon: 'user-cog', label: 'Team' },
     { id: 'audit-log', icon: 'scroll-text', label: 'Audit Log' },
     { id: 'settings', icon: 'settings', label: 'Settings' },
   ]},
