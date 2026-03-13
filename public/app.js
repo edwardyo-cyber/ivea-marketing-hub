@@ -90,6 +90,19 @@ function getInitials(name) {
   return (name || '').split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2);
 }
 
+function socialProfileUrl(platform, handle) {
+  const h = (handle || '').replace(/^@/, '');
+  switch ((platform || '').toLowerCase()) {
+    case 'instagram': return `https://instagram.com/${h}`;
+    case 'tiktok': return `https://tiktok.com/@${h}`;
+    case 'youtube': return `https://youtube.com/@${h}`;
+    case 'twitter': case 'x': return `https://x.com/${h}`;
+    case 'facebook': return `https://facebook.com/${h}`;
+    case 'linkedin': return `https://linkedin.com/in/${h}`;
+    default: return `https://instagram.com/${h}`;
+  }
+}
+
 function csvExport(data, filename) {
   if (!data.length) return toast('No data to export', 'error');
   const keys = Object.keys(data[0]);
@@ -1267,7 +1280,7 @@ async function renderInfluencers(container) {
     return `<tr data-id="${i.id}">
       <td><input type="checkbox" class="inf-check" value="${i.id}"></td>
       <td>${i.name}</td>
-      <td>${i.handle || '—'}</td>
+      <td>${i.handle ? `<a href="${socialProfileUrl(i.platform, i.handle)}" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:none">${i.handle}</a>` : '—'}</td>
       <td>${i.platform || '—'}</td>
       <td>${i.followers?.toLocaleString() || '—'}</td>
       <td>${i.engagement_rate != null ? i.engagement_rate + '%' : '—'}</td>
