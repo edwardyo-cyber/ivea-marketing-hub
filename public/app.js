@@ -400,15 +400,16 @@ function employeeOptions(selected) {
 }
 
 // --- Sortable Table ---
-function makeSortable(tableEl, data, renderRow, tbody) {
+function makeSortable(tableEl, data, renderRow, tbody, { onAfterSort } = {}) {
   const headers = $$('th[data-key]', tableEl);
   let sortKey = null, sortDir = 'asc';
   headers.forEach(th => {
+    th.style.cursor = 'pointer';
     th.onclick = () => {
       const key = th.dataset.key;
       if (sortKey === key) sortDir = sortDir === 'asc' ? 'desc' : 'asc';
       else { sortKey = key; sortDir = 'asc'; }
-      headers.forEach(h => h.querySelector('.sort-icon') && (h.querySelector('.sort-icon').textContent = ''));
+      headers.forEach(h => { const si = h.querySelector('.sort-icon'); if (si) si.textContent = ''; });
       let icon = th.querySelector('.sort-icon');
       if (!icon) { icon = el('span', { className: 'sort-icon' }); th.appendChild(icon); }
       icon.textContent = sortDir === 'asc' ? ' ▲' : ' ▼';
@@ -416,11 +417,12 @@ function makeSortable(tableEl, data, renderRow, tbody) {
         let va = a[key], vb = b[key];
         if (va == null) va = '';
         if (vb == null) vb = '';
-        if (typeof va === 'number') return sortDir === 'asc' ? va - vb : vb - va;
+        if (typeof va === 'number' || typeof vb === 'number') return sortDir === 'asc' ? (Number(va) || 0) - (Number(vb) || 0) : (Number(vb) || 0) - (Number(va) || 0);
         return sortDir === 'asc' ? String(va).localeCompare(String(vb)) : String(vb).localeCompare(String(va));
       });
-      tbody.innerHTML = '';
-      data.forEach(r => tbody.innerHTML += renderRow(r));
+      tbody.innerHTML = data.map(renderRow).join('');
+      lucide.createIcons({ nameAttr: 'data-lucide' });
+      if (onAfterSort) onAfterSort();
     };
   });
 }
@@ -1261,7 +1263,7 @@ async function renderCalendar(container) {
 // ============================================
 async function renderInfluencers(container) {
   await getEmployees();
-  const { data: influencers } = await sb.from('influencers').select('*').order('created_at', { ascending: false });
+  const { data: influencers } = await sb.from('influencers').select('*').order('followers', { ascending: false });
   const items = influencers || [];
   const stages = ['lead', 'prospect', 'outreach', 'negotiation', 'contracted', 'completed'];
   const stageColors = { lead: '#94a3b8', prospect: '#666', outreach: '#3b82f6', negotiation: '#f59e0b', contracted: '#22c55e', completed: '#8b5cf6' };
@@ -1394,7 +1396,7 @@ async function renderInfluencers(container) {
 
     // Sort
     const table = $('table', container);
-    if (table) makeSortable(table, f, rowHTML, $('#inf-tbody'));
+    if (table) makeSortable(table, f, rowHTML, $('#inf-tbody'), { onAfterSort: bindCheck });
   }
   render();
 }
