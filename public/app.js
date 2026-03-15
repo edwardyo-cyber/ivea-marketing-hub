@@ -1263,8 +1263,8 @@ async function renderInfluencers(container) {
   await getEmployees();
   const { data: influencers } = await sb.from('influencers').select('*').order('created_at', { ascending: false });
   const items = influencers || [];
-  const stages = ['prospect', 'outreach', 'negotiation', 'contracted', 'completed'];
-  const stageColors = { prospect: '#666', outreach: '#3b82f6', negotiation: '#f59e0b', contracted: '#22c55e', completed: '#8b5cf6' };
+  const stages = ['lead', 'prospect', 'outreach', 'negotiation', 'contracted', 'completed'];
+  const stageColors = { lead: '#94a3b8', prospect: '#666', outreach: '#3b82f6', negotiation: '#f59e0b', contracted: '#22c55e', completed: '#8b5cf6' };
   let activeFilter = '';
   let selected = new Set();
 
@@ -1298,7 +1298,7 @@ async function renderInfluencers(container) {
   function render() {
     const f = filtered();
     container.innerHTML = `
-      <h1 class="page-title">Influencers</h1>
+      <h1 class="page-title">Influencers <span style="font-size:16px;font-weight:400;color:var(--text-muted)">(${items.length} total)</span></h1>
       <p class="page-subtitle">Manage influencer pipeline and relationships</p>
       <div class="pipeline-grid">
         ${stageCounts().map(s => `
