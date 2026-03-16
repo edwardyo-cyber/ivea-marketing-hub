@@ -5466,7 +5466,7 @@ async function openSmsThread(phone) {
   chat.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
   
   try {
-    const res = await fetch(`/api/sms?action=thread&phone=${encodeURIComponent(phone)}`);
+    const res = await fetch(`/api/outreach?action=thread&phone=${encodeURIComponent(phone)}`);
     const data = await res.json();
     smsMessages = data.messages || [];
     renderSmsChat(phone);
