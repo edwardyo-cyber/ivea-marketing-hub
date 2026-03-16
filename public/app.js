@@ -7772,3 +7772,4 @@ document.addEventListener('DOMContentLoaded', () => {
 // Make navigate global for onclick handlers
 window.navigate = navigate;
 window.closeModal = closeModal;
+
