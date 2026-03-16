@@ -1353,9 +1353,9 @@ async function renderInfPipeline(container) {
       <td>${badgeHTML(i.pipeline_stage)}</td>
       <td>${formatDate(i.last_contacted)}</td>
       <td class="table-actions" style="white-space:nowrap">
-        ${i.email ? `<button class="btn-icon btn-ghost" onclick="quickEmail('${i.id}')" title="Send Email"><i data-lucide="mail"></i></button>` : ''}
-        ${i.phone ? `<button class="btn-icon btn-ghost" onclick="quickSMS('${i.id}')" title="Send SMS"><i data-lucide="smartphone"></i></button>` : ''}
-        ${i.handle ? `<button class="btn-icon btn-ghost" onclick="quickDM('${i.id}')" title="DM Script"><i data-lucide="message-circle"></i></button>` : ''}
+        <button class="btn-icon btn-ghost" onclick="quickEmail('${i.id}')" title="${i.email ? 'Send Email' : 'Add email to send'}"><i data-lucide="mail" style="${i.email ? '' : 'opacity:0.3'}"></i></button>
+        <button class="btn-icon btn-ghost" onclick="quickSMS('${i.id}')" title="${i.phone ? 'Send SMS' : 'Add phone to text'}"><i data-lucide="smartphone" style="${i.phone ? '' : 'opacity:0.3'}"></i></button>
+        <button class="btn-icon btn-ghost" onclick="quickDM('${i.id}')" title="DM on ${i.platform || 'Instagram'}"><i data-lucide="message-circle" style="color:#e1306c"></i></button>
         <button class="btn-icon btn-ghost" onclick="viewInfluencerProfile('${i.id}')" title="View Profile"><i data-lucide="user"></i></button>
         <button class="btn-icon btn-ghost" onclick="editInfluencer('${i.id}')"><i data-lucide="edit-2"></i></button>
         <button class="btn-icon btn-ghost" onclick="deleteInfluencer('${i.id}')"><i data-lucide="trash-2"></i></button>
@@ -2620,7 +2620,21 @@ window.deleteOutreachTemplate = function(id) {
 // Quick-contact modals (from pipeline row)
 window.quickEmail = async function(id) {
   const { data: inf } = await sb.from('influencers').select('*').eq('id', id).single();
-  if (!inf?.email) return toast('No email for this influencer', 'error');
+  if (!inf?.email) {
+    openModal(`Add Email for ${inf?.name || 'Influencer'}`, `
+      <p style="color:var(--text-muted);margin-bottom:16px">This influencer doesn't have an email on file. Add one to send them a message.</p>
+      <div class="form-group"><label class="form-label">Email Address</label><input class="form-input" id="add-email-input" type="email" placeholder="name@example.com"></div>
+    `, `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button><button class="btn btn-primary" id="add-email-save">Save & Compose</button>`);
+    $('#add-email-save').onclick = async () => {
+      const email = $('#add-email-input').value.trim();
+      if (!email) return toast('Enter an email', 'error');
+      await sb.from('influencers').update({ email }).eq('id', id);
+      closeModal();
+      toast('Email saved', 'success');
+      quickEmail(id);
+    };
+    return;
+  }
   const { data: templates } = await sb.from('outreach_templates').select('*').eq('channel', 'email').order('created_at');
   const tpls = templates || [];
 
@@ -2663,7 +2677,21 @@ window.quickEmail = async function(id) {
 
 window.quickSMS = async function(id) {
   const { data: inf } = await sb.from('influencers').select('*').eq('id', id).single();
-  if (!inf?.phone) return toast('No phone for this influencer', 'error');
+  if (!inf?.phone) {
+    openModal(`Add Phone for ${inf?.name || 'Influencer'}`, `
+      <p style="color:var(--text-muted);margin-bottom:16px">This influencer doesn't have a phone number on file. Add one to send them a text.</p>
+      <div class="form-group"><label class="form-label">Phone Number</label><input class="form-input" id="add-phone-input" type="tel" placeholder="+1 (555) 123-4567"></div>
+    `, `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button><button class="btn btn-primary" id="add-phone-save">Save & Compose</button>`);
+    $('#add-phone-save').onclick = async () => {
+      const phone = $('#add-phone-input').value.trim();
+      if (!phone) return toast('Enter a phone number', 'error');
+      await sb.from('influencers').update({ phone }).eq('id', id);
+      closeModal();
+      toast('Phone saved', 'success');
+      quickSMS(id);
+    };
+    return;
+  }
 
   openModal(`Text ${inf.name}`, `
     <div class="form-group"><label class="form-label">To</label><input class="form-input" value="${inf.phone}" readonly></div>
