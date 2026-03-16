@@ -1342,7 +1342,7 @@ async function renderInfPipeline(container) {
     const tier = infTier(i.followers);
     return `<tr data-id="${i.id}">
       <td><input type="checkbox" class="inf-check" value="${i.id}"></td>
-      <td><strong>${i.name}</strong><div style="font-size:11px;color:var(--text-muted)">${i.handle ? '@' + i.handle.replace(/^@/,'') : ''}</div></td>
+      <td><strong>${i.name}</strong><div style="font-size:11px">${i.handle ? `<a href="${socialProfileUrl(i.platform, i.handle)}" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:none">@${i.handle.replace(/^@/,'')}</a>` : ''}</div></td>
       <td>${i.platform || '—'}</td>
       <td><span style="color:${tierColor(tier)};font-weight:600">${tier}</span><div style="font-size:11px;color:var(--text-muted)">${i.followers?.toLocaleString() || '0'}</div></td>
       <td>${i.engagement_rate ? i.engagement_rate + '%' : '—'}</td>
@@ -1517,7 +1517,7 @@ async function renderInfPosts(container) {
         <tbody id="posts-tbody">${posts.map(p => {
           const inf = infMap[p.influencer_id];
           return `<tr>
-            <td><strong>${inf?.name || 'Unknown'}</strong><div style="font-size:11px;color:var(--text-muted)">${inf?.handle ? '@' + inf.handle.replace(/^@/,'') : ''}</div></td>
+            <td><strong>${inf?.name || 'Unknown'}</strong><div style="font-size:11px">${inf?.handle ? `<a href="${socialProfileUrl(inf.platform, inf.handle)}" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:none">@${inf.handle.replace(/^@/,'')}</a>` : ''}</div></td>
             <td>${badgeHTML(p.platform || '—')}</td>
             <td>${badgeHTML(p.post_type || 'post')}</td>
             <td>${formatDate(p.posted_at)}</td>
@@ -1920,7 +1920,7 @@ async function renderInfInteractions(container) {
           </div>
           <div style="flex:1;min-width:0">
             <div style="display:flex;justify-content:space-between;align-items:center">
-              <div><strong>${inf?.name || 'Unknown'}</strong> <span style="color:var(--text-muted);font-size:12px">${inf?.handle ? '@' + inf.handle.replace(/^@/,'') : ''}</span></div>
+              <div><strong>${inf?.name || 'Unknown'}</strong> ${inf?.handle ? `<a href="${socialProfileUrl(inf.platform, inf.handle)}" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:none;font-size:12px">@${inf.handle.replace(/^@/,'')}</a>` : ''}</div>
               <div style="display:flex;align-items:center;gap:8px">
                 <span style="font-size:12px;color:var(--text-muted)">${formatDateTime(int.created_at)}</span>
                 ${badgeHTML(int.type)}
@@ -2088,7 +2088,7 @@ async function renderInfAmbassador(container) {
         <th>Milestones</th>
       </tr></thead>
       <tbody>${infStats.map(inf => `<tr>
-        <td><strong>${inf.name}</strong><div style="font-size:11px;color:var(--text-muted)">${inf.handle ? '@' + inf.handle.replace(/^@/,'') : ''} • ${infTier(inf.followers)}</div></td>
+        <td><strong>${inf.name}</strong><div style="font-size:11px">${inf.handle ? `<a href="${socialProfileUrl(inf.platform, inf.handle)}" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:none">@${inf.handle.replace(/^@/,'')}</a> • ` : ''}${infTier(inf.followers)}</div></td>
         <td>${ambassadorBadge(inf.tierObj?.name)}<div style="font-size:11px;color:var(--text-muted)">${inf.collabCount}/${(tiers.find(t => t.sort_order === (inf.tierObj?.sort_order || 0) + 1) || { min_collabs: '∞' }).min_collabs} to next tier</div></td>
         <td>${inf.postCount}</td>
         <td>${inf.totalViews.toLocaleString()}</td>
@@ -2754,7 +2754,7 @@ window.viewInfluencerProfile = async function(id) {
       </div>
       <div style="flex:1">
         <h3 style="margin:0">${inf.name}</h3>
-        <div style="color:var(--text-muted)">${inf.handle ? '@' + inf.handle.replace(/^@/,'') : ''} • ${inf.platform || ''} • ${inf.location || ''}</div>
+        <div style="color:var(--text-muted)">${inf.handle ? `<a href="${socialProfileUrl(inf.platform, inf.handle)}" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:none">@${inf.handle.replace(/^@/,'')}</a>` : ''} • ${inf.platform || ''} • ${inf.location || ''}</div>
         <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
           <span class="badge" style="background:${tierColor(tier)}20;color:${tierColor(tier)}">${tier} (${(inf.followers || 0).toLocaleString()})</span>
           ${badgeHTML(inf.pipeline_stage)}
