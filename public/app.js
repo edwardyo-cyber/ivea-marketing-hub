@@ -2263,7 +2263,7 @@ async function renderInfOutreach(container) {
       $('#oc-send-email').disabled = true;
       $('#oc-send-email').textContent = 'Sending...';
       try {
-        const res = await fetch('/api/send-email', {
+        const res = await fetch('/api/outreach?action=send_email', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ to: inf.email, subject, body: body.replace(/\n/g, '<br>') }),
@@ -2306,7 +2306,7 @@ async function renderInfOutreach(container) {
       $('#oc-send-sms').disabled = true;
       $('#oc-send-sms').textContent = 'Sending...';
       try {
-        const res = await fetch('/api/sms?action=send', {
+        const res = await fetch('/api/outreach?action=send', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ to: inf.phone, body }),
@@ -2520,7 +2520,7 @@ async function renderInfOutreach(container) {
           const subject = mergeVars(tpl.subject, inf);
           const body = mergeVars(tpl.body, inf);
           try {
-            const res = await fetch('/api/send-email', {
+            const res = await fetch('/api/outreach?action=send_email', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ to: inf.email, subject, body }),
@@ -2663,7 +2663,7 @@ window.quickEmail = async function(id) {
     if (!subject || !body) return toast('Subject and message required', 'error');
     $('#qe-send').disabled = true;
     try {
-      const res = await fetch('/api/send-email', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ to: inf.email, subject, body: body.replace(/\n/g, '<br>') }) });
+      const res = await fetch('/api/outreach?action=send_email', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ to: inf.email, subject, body: body.replace(/\n/g, '<br>') }) });
       const result = await res.json();
       if (result.error) throw new Error(result.error);
       await sb.from('outreach_log').insert({ influencer_id: inf.id, channel: 'email', recipient: inf.email, subject, body, status: 'sent', sent_by: currentUser?.id });
@@ -2706,7 +2706,7 @@ window.quickSMS = async function(id) {
     if (!body) return toast('Message required', 'error');
     $('#qs-send').disabled = true;
     try {
-      const res = await fetch('/api/sms?action=send', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ to: inf.phone, body }) });
+      const res = await fetch('/api/outreach?action=send', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ to: inf.phone, body }) });
       const result = await res.json();
       if (result.error) throw new Error(result.error);
       await sb.from('outreach_log').insert({ influencer_id: inf.id, channel: 'sms', recipient: inf.phone, body, status: 'sent', sent_by: currentUser?.id });
@@ -5372,7 +5372,7 @@ async function renderTextMessages(container) {
   lucide.createIcons();
   
   try {
-    const res = await fetch('/api/sms?action=status');
+    const res = await fetch('/api/outreach?action=status');
     const data = await res.json();
     if (data.needsSetup || data.error) {
       renderSmsSetup();
@@ -5400,7 +5400,7 @@ function renderSmsSetup() {
 
 async function loadSmsConversations() {
   try {
-    const res = await fetch('/api/sms?action=conversations');
+    const res = await fetch('/api/outreach?action=conversations');
     const data = await res.json();
     smsConversations = data.conversations || [];
     smsTwilioNumber = data.twilioNumber || smsTwilioNumber;
@@ -5522,7 +5522,7 @@ function renderSmsChat(phone) {
     msgs.scrollTop = msgs.scrollHeight;
     
     try {
-      const res = await fetch('/api/sms?action=send', {
+      const res = await fetch('/api/outreach?action=send', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ to: phone, body }),
@@ -5568,7 +5568,7 @@ function openNewSmsModal() {
       btn.textContent = 'Sending...';
       
       try {
-        const res = await fetch('/api/sms?action=send', {
+        const res = await fetch('/api/outreach?action=send', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ to: phone, body }),
