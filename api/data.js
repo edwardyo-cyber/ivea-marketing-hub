@@ -55,6 +55,7 @@ const SCOPED_TABLES = [
   'influencer_posts', 'influencer_post_metrics', 'influencer_payments',
   'influencer_promo_codes', 'influencer_ambassador_tiers',
   'influencer_milestones', 'influencer_referrals',
+  'outreach_templates', 'outreach_log',
 ];
 
 // Tables that are global (no restaurant_id)

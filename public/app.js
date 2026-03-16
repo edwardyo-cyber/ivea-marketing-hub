@@ -1290,6 +1290,7 @@ async function renderInfluencers(container) {
   await getEmployees();
   const tabs = [
     { id: 'pipeline', icon: 'git-branch', label: 'Pipeline' },
+    { id: 'outreach', icon: 'send', label: 'Outreach' },
     { id: 'posts', icon: 'play-circle', label: 'Posts & Performance' },
     { id: 'payments', icon: 'credit-card', label: 'Payments' },
     { id: 'interactions', icon: 'message-circle', label: 'Interactions' },
@@ -1315,6 +1316,7 @@ async function renderInfluencers(container) {
 
   const tc = $('#inf-tab-content');
   if (infActiveTab === 'pipeline') await renderInfPipeline(tc);
+  else if (infActiveTab === 'outreach') await renderInfOutreach(tc);
   else if (infActiveTab === 'posts') await renderInfPosts(tc);
   else if (infActiveTab === 'payments') await renderInfPayments(tc);
   else if (infActiveTab === 'interactions') await renderInfInteractions(tc);
@@ -1350,7 +1352,10 @@ async function renderInfPipeline(container) {
       <td>${i.rate ? '$' + Number(i.rate).toLocaleString() : '—'}</td>
       <td>${badgeHTML(i.pipeline_stage)}</td>
       <td>${formatDate(i.last_contacted)}</td>
-      <td class="table-actions">
+      <td class="table-actions" style="white-space:nowrap">
+        ${i.email ? `<button class="btn-icon btn-ghost" onclick="quickEmail('${i.id}')" title="Send Email"><i data-lucide="mail"></i></button>` : ''}
+        ${i.phone ? `<button class="btn-icon btn-ghost" onclick="quickSMS('${i.id}')" title="Send SMS"><i data-lucide="smartphone"></i></button>` : ''}
+        ${i.handle ? `<button class="btn-icon btn-ghost" onclick="quickDM('${i.id}')" title="DM Script"><i data-lucide="message-circle"></i></button>` : ''}
         <button class="btn-icon btn-ghost" onclick="viewInfluencerProfile('${i.id}')" title="View Profile"><i data-lucide="user"></i></button>
         <button class="btn-icon btn-ghost" onclick="editInfluencer('${i.id}')"><i data-lucide="edit-2"></i></button>
         <button class="btn-icon btn-ghost" onclick="deleteInfluencer('${i.id}')"><i data-lucide="trash-2"></i></button>
@@ -2097,6 +2102,629 @@ async function renderInfAmbassador(container) {
   lucide.createIcons({ nameAttr: 'data-lucide' });
 }
 
+// ---- TAB: Outreach ----
+async function renderInfOutreach(container) {
+  const [templatesRes, logRes, influencersRes] = await Promise.all([
+    sb.from('outreach_templates').select('*').order('created_at'),
+    sb.from('outreach_log').select('*').order('sent_at', { ascending: false }).limit(100),
+    sb.from('influencers').select('id,name,handle,email,phone,platform,pipeline_stage'),
+  ]);
+  const templates = templatesRes.data || [];
+  const logs = logRes.data || [];
+  const influencers = influencersRes.data || [];
+  const infMap = {};
+  influencers.forEach(i => infMap[i.id] = i);
+
+  const sent7d = logs.filter(l => new Date(l.sent_at) > new Date(Date.now() - 7 * 86400000)).length;
+  const replied = logs.filter(l => l.status === 'replied').length;
+  const replyRate = logs.length ? ((replied / logs.length) * 100).toFixed(1) : '0';
+
+  let outreachView = 'compose'; // compose, templates, history, bulk
+
+  function renderOutreach() {
+    container.innerHTML = `
+      <div class="kpi-grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:20px">
+        <div class="kpi-card"><div class="kpi-label">Total Sent</div><div class="kpi-value">${logs.length}</div></div>
+        <div class="kpi-card"><div class="kpi-label">Sent This Week</div><div class="kpi-value">${sent7d}</div></div>
+        <div class="kpi-card"><div class="kpi-label">Replies</div><div class="kpi-value" style="color:var(--success)">${replied}</div></div>
+        <div class="kpi-card"><div class="kpi-label">Reply Rate</div><div class="kpi-value">${replyRate}%</div></div>
+      </div>
+      <div style="display:flex;gap:8px;margin-bottom:20px">
+        ${['compose','templates','history','bulk'].map(v => `<button class="btn ${outreachView === v ? 'btn-primary' : 'btn-secondary'} btn-sm" data-ov="${v}">${v === 'compose' ? '✉️ Compose' : v === 'templates' ? '📋 Templates' : v === 'history' ? '📊 History' : '📨 Bulk Outreach'}</button>`).join('')}
+      </div>
+      <div id="outreach-content"></div>
+    `;
+    lucide.createIcons({ nameAttr: 'data-lucide' });
+    $$('[data-ov]', container).forEach(btn => btn.onclick = () => { outreachView = btn.dataset.ov; renderOutreach(); });
+
+    const oc = $('#outreach-content');
+    if (outreachView === 'compose') renderCompose(oc);
+    else if (outreachView === 'templates') renderTemplates(oc);
+    else if (outreachView === 'history') renderHistory(oc);
+    else if (outreachView === 'bulk') renderBulk(oc);
+  }
+
+  function mergeVars(text, inf) {
+    return (text || '')
+      .replace(/\{\{name\}\}/g, inf?.name || '')
+      .replace(/\{\{handle\}\}/g, inf?.handle ? '@' + inf.handle.replace(/^@/, '') : '')
+      .replace(/\{\{brand\}\}/g, '{{brand}}') // will be replaced by settings
+      .replace(/\{\{sender_name\}\}/g, currentUser?.name || '')
+      .replace(/\{\{rate\}\}/g, inf?.rate ? '$' + Number(inf.rate).toLocaleString() : 'TBD');
+  }
+
+  // --- Compose ---
+  function renderCompose(oc) {
+    const emailTemplates = templates.filter(t => t.channel === 'email');
+    const smsTemplates = templates.filter(t => t.channel === 'sms');
+    const dmTemplates = templates.filter(t => t.channel === 'dm');
+
+    oc.innerHTML = `
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:20px">
+        <div class="card" style="padding:20px">
+          <h3 style="display:flex;align-items:center;gap:8px;margin-bottom:16px"><i data-lucide="mail" style="width:18px;height:18px;color:var(--accent)"></i> Send Email</h3>
+          <div class="form-group"><label class="form-label">To (Influencer)</label>
+            <select class="form-select" id="oc-email-inf">
+              <option value="">Select influencer...</option>
+              ${influencers.filter(i => i.email).map(i => `<option value="${i.id}">${i.name} — ${i.email}</option>`).join('')}
+            </select>
+          </div>
+          <div class="form-group"><label class="form-label">Template</label>
+            <select class="form-select" id="oc-email-tpl">
+              <option value="">Custom message...</option>
+              ${emailTemplates.map(t => `<option value="${t.id}">${t.name}</option>`).join('')}
+            </select>
+          </div>
+          <div class="form-group"><label class="form-label">Subject</label><input class="form-input" id="oc-email-subject"></div>
+          <div class="form-group"><label class="form-label">Message</label><textarea class="form-textarea" id="oc-email-body" rows="6"></textarea></div>
+          <button class="btn btn-primary btn-sm" id="oc-send-email"><i data-lucide="send" style="width:14px;height:14px"></i> Send Email</button>
+        </div>
+
+        <div class="card" style="padding:20px">
+          <h3 style="display:flex;align-items:center;gap:8px;margin-bottom:16px"><i data-lucide="smartphone" style="width:18px;height:18px;color:var(--success)"></i> Send SMS</h3>
+          <div class="form-group"><label class="form-label">To (Influencer)</label>
+            <select class="form-select" id="oc-sms-inf">
+              <option value="">Select influencer...</option>
+              ${influencers.filter(i => i.phone).map(i => `<option value="${i.id}">${i.name} — ${i.phone}</option>`).join('')}
+            </select>
+          </div>
+          <div class="form-group"><label class="form-label">Template</label>
+            <select class="form-select" id="oc-sms-tpl">
+              <option value="">Custom message...</option>
+              ${smsTemplates.map(t => `<option value="${t.id}">${t.name}</option>`).join('')}
+            </select>
+          </div>
+          <div class="form-group"><label class="form-label">Message</label><textarea class="form-textarea" id="oc-sms-body" rows="4"></textarea></div>
+          <div style="font-size:11px;color:var(--text-muted);margin-bottom:8px"><span id="oc-sms-chars">0</span>/160 characters</div>
+          <button class="btn btn-primary btn-sm" id="oc-send-sms" style="background:var(--success)"><i data-lucide="send" style="width:14px;height:14px"></i> Send SMS</button>
+        </div>
+
+        <div class="card" style="padding:20px">
+          <h3 style="display:flex;align-items:center;gap:8px;margin-bottom:16px"><i data-lucide="message-circle" style="width:18px;height:18px;color:#e1306c"></i> DM Script</h3>
+          <div class="form-group"><label class="form-label">Influencer</label>
+            <select class="form-select" id="oc-dm-inf">
+              <option value="">Select influencer...</option>
+              ${influencers.filter(i => i.handle).map(i => `<option value="${i.id}">${i.name} — @${(i.handle||'').replace(/^@/,'')}</option>`).join('')}
+            </select>
+          </div>
+          <div class="form-group"><label class="form-label">Template</label>
+            <select class="form-select" id="oc-dm-tpl">
+              <option value="">Custom message...</option>
+              ${dmTemplates.map(t => `<option value="${t.id}">${t.name}</option>`).join('')}
+            </select>
+          </div>
+          <div class="form-group"><label class="form-label">Message</label><textarea class="form-textarea" id="oc-dm-body" rows="4"></textarea></div>
+          <div style="display:flex;gap:8px">
+            <button class="btn btn-primary btn-sm" id="oc-copy-dm" style="background:#e1306c"><i data-lucide="copy" style="width:14px;height:14px"></i> Copy Message</button>
+            <button class="btn btn-secondary btn-sm" id="oc-open-profile"><i data-lucide="external-link" style="width:14px;height:14px"></i> Open Profile</button>
+          </div>
+        </div>
+      </div>
+    `;
+    lucide.createIcons({ nameAttr: 'data-lucide' });
+
+    // Template auto-fill for email
+    $('#oc-email-tpl').onchange = () => {
+      const tpl = templates.find(t => t.id == $('#oc-email-tpl').value);
+      const inf = infMap[parseInt($('#oc-email-inf').value)];
+      if (tpl) {
+        $('#oc-email-subject').value = mergeVars(tpl.subject, inf);
+        $('#oc-email-body').value = mergeVars(tpl.body, inf).replace(/<[^>]*>/g, '');
+      }
+    };
+    $('#oc-email-inf').onchange = () => { if ($('#oc-email-tpl').value) $('#oc-email-tpl').dispatchEvent(new Event('change')); };
+
+    // Template auto-fill for SMS
+    $('#oc-sms-tpl').onchange = () => {
+      const tpl = templates.find(t => t.id == $('#oc-sms-tpl').value);
+      const inf = infMap[parseInt($('#oc-sms-inf').value)];
+      if (tpl) $('#oc-sms-body').value = mergeVars(tpl.body, inf);
+    };
+    $('#oc-sms-inf').onchange = () => { if ($('#oc-sms-tpl').value) $('#oc-sms-tpl').dispatchEvent(new Event('change')); };
+    $('#oc-sms-body').oninput = () => { $('#oc-sms-chars').textContent = $('#oc-sms-body').value.length; };
+
+    // Template auto-fill for DM
+    $('#oc-dm-tpl').onchange = () => {
+      const tpl = templates.find(t => t.id == $('#oc-dm-tpl').value);
+      const inf = infMap[parseInt($('#oc-dm-inf').value)];
+      if (tpl) $('#oc-dm-body').value = mergeVars(tpl.body, inf);
+    };
+    $('#oc-dm-inf').onchange = () => { if ($('#oc-dm-tpl').value) $('#oc-dm-tpl').dispatchEvent(new Event('change')); };
+
+    // Send Email
+    $('#oc-send-email').onclick = async () => {
+      const infId = parseInt($('#oc-email-inf').value);
+      const inf = infMap[infId];
+      if (!inf?.email) return toast('Select an influencer with email', 'error');
+      const subject = $('#oc-email-subject').value;
+      const body = $('#oc-email-body').value;
+      if (!subject || !body) return toast('Subject and message required', 'error');
+
+      $('#oc-send-email').disabled = true;
+      $('#oc-send-email').textContent = 'Sending...';
+      try {
+        const res = await fetch('/api/send-email', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ to: inf.email, subject, body: body.replace(/\n/g, '<br>') }),
+        });
+        const result = await res.json();
+        if (result.error) throw new Error(result.error);
+
+        await sb.from('outreach_log').insert({
+          influencer_id: infId, channel: 'email', recipient: inf.email,
+          subject, body, status: 'sent', sent_by: currentUser?.id,
+          template_id: parseInt($('#oc-email-tpl').value) || null,
+        });
+        await sb.from('influencers').update({ last_contacted: new Date().toISOString() }).eq('id', infId);
+        await sb.from('influencer_interactions').insert({
+          influencer_id: infId, type: 'email', subject,
+          notes: `Sent outreach email: ${subject}`, employee_id: currentUser?.id,
+        });
+        toast('Email sent!', 'success');
+        await logActivity('influencer_outreach', `Sent email to ${inf.name}`);
+      } catch (err) {
+        toast('Failed: ' + err.message, 'error');
+        await sb.from('outreach_log').insert({
+          influencer_id: infId, channel: 'email', recipient: inf.email,
+          subject, body, status: 'failed', sent_by: currentUser?.id, error_message: err.message,
+        });
+      }
+      $('#oc-send-email').disabled = false;
+      $('#oc-send-email').innerHTML = '<i data-lucide="send" style="width:14px;height:14px"></i> Send Email';
+      lucide.createIcons({ nameAttr: 'data-lucide' });
+    };
+
+    // Send SMS
+    $('#oc-send-sms').onclick = async () => {
+      const infId = parseInt($('#oc-sms-inf').value);
+      const inf = infMap[infId];
+      if (!inf?.phone) return toast('Select an influencer with phone', 'error');
+      const body = $('#oc-sms-body').value;
+      if (!body) return toast('Message required', 'error');
+
+      $('#oc-send-sms').disabled = true;
+      $('#oc-send-sms').textContent = 'Sending...';
+      try {
+        const res = await fetch('/api/sms?action=send', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ to: inf.phone, body }),
+        });
+        const result = await res.json();
+        if (result.error) throw new Error(result.error);
+
+        await sb.from('outreach_log').insert({
+          influencer_id: infId, channel: 'sms', recipient: inf.phone,
+          body, status: 'sent', sent_by: currentUser?.id,
+          template_id: parseInt($('#oc-sms-tpl').value) || null,
+        });
+        await sb.from('influencers').update({ last_contacted: new Date().toISOString() }).eq('id', infId);
+        await sb.from('influencer_interactions').insert({
+          influencer_id: infId, type: 'dm', subject: 'SMS Outreach',
+          notes: `Sent SMS: ${body.substring(0, 100)}...`, employee_id: currentUser?.id,
+        });
+        toast('SMS sent!', 'success');
+        await logActivity('influencer_outreach', `Sent SMS to ${inf.name}`);
+      } catch (err) {
+        toast('Failed: ' + err.message, 'error');
+      }
+      $('#oc-send-sms').disabled = false;
+      $('#oc-send-sms').innerHTML = '<i data-lucide="send" style="width:14px;height:14px"></i> Send SMS';
+      lucide.createIcons({ nameAttr: 'data-lucide' });
+    };
+
+    // Copy DM
+    $('#oc-copy-dm').onclick = async () => {
+      const infId = parseInt($('#oc-dm-inf').value);
+      const inf = infMap[infId];
+      const body = $('#oc-dm-body').value;
+      if (!body) return toast('Write a message first', 'error');
+
+      try { await navigator.clipboard.writeText(body); } catch { /* fallback */ }
+      toast('DM copied to clipboard!', 'success');
+
+      if (infId) {
+        await sb.from('outreach_log').insert({
+          influencer_id: infId, channel: 'dm_copy', body, status: 'sent',
+          sent_by: currentUser?.id, template_id: parseInt($('#oc-dm-tpl').value) || null,
+        });
+        await sb.from('influencer_interactions').insert({
+          influencer_id: infId, type: 'dm', subject: 'DM Outreach',
+          notes: `Copied DM script: ${body.substring(0, 100)}...`, employee_id: currentUser?.id,
+        });
+      }
+    };
+
+    // Open profile
+    $('#oc-open-profile').onclick = () => {
+      const inf = infMap[parseInt($('#oc-dm-inf').value)];
+      if (!inf?.handle) return toast('Select an influencer', 'error');
+      window.open(socialProfileUrl(inf.platform, inf.handle), '_blank');
+    };
+  }
+
+  // --- Templates ---
+  function renderTemplates(oc) {
+    const channelFilter = { email: '📧 Email', sms: '💬 SMS', dm: '📱 DM' };
+    oc.innerHTML = `
+      <div class="table-toolbar">
+        <div style="font-weight:600">Outreach Templates</div>
+        <div style="margin-left:auto">
+          ${canEdit() ? '<button class="btn btn-primary btn-sm" id="new-tpl-btn"><i data-lucide="plus"></i> New Template</button>' : ''}
+        </div>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(350px,1fr));gap:12px;margin-top:16px">
+        ${templates.map(t => `
+          <div class="card" style="padding:16px">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+              <div><strong>${escapeHtml(t.name)}</strong></div>
+              <div style="display:flex;gap:4px">${badgeHTML(t.channel)} ${badgeHTML(t.category)}</div>
+            </div>
+            ${t.subject ? `<div style="font-size:12px;color:var(--text-muted);margin-bottom:4px">Subject: ${escapeHtml(t.subject)}</div>` : ''}
+            <div style="font-size:13px;color:var(--text-muted);max-height:80px;overflow:hidden">${escapeHtml(t.body?.replace(/<[^>]*>/g, '').substring(0, 200))}...</div>
+            <div style="display:flex;gap:8px;margin-top:12px">
+              <button class="btn btn-secondary btn-sm" onclick="editOutreachTemplate('${t.id}')">Edit</button>
+              <button class="btn btn-ghost btn-sm" onclick="deleteOutreachTemplate('${t.id}')"><i data-lucide="trash-2" style="width:14px;height:14px"></i></button>
+            </div>
+          </div>
+        `).join('')}
+        ${!templates.length ? '<div class="empty-state"><p>No templates yet. Create one to speed up outreach.</p></div>' : ''}
+      </div>
+    `;
+    lucide.createIcons({ nameAttr: 'data-lucide' });
+    if ($('#new-tpl-btn')) $('#new-tpl-btn').onclick = () => editOutreachTemplate(null);
+  }
+
+  // --- History ---
+  function renderHistory(oc) {
+    oc.innerHTML = `
+      <div class="table-wrapper"><table>
+        <thead><tr>
+          <th>Influencer</th><th>Channel</th><th>Recipient</th><th>Subject/Preview</th><th>Status</th><th>Sent By</th><th>Date</th>
+        </tr></thead>
+        <tbody>${logs.map(l => {
+          const inf = infMap[l.influencer_id];
+          return `<tr>
+            <td><strong>${inf?.name || 'Unknown'}</strong></td>
+            <td>${badgeHTML(l.channel)}</td>
+            <td style="font-size:12px">${l.recipient || '—'}</td>
+            <td style="font-size:12px;max-width:250px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${l.subject || l.body?.substring(0, 60) || '—'}</td>
+            <td>${badgeHTML(l.status)}</td>
+            <td>${employeeName(l.sent_by)}</td>
+            <td>${formatDateTime(l.sent_at)}</td>
+          </tr>`;
+        }).join('')}</tbody>
+      </table></div>
+      ${!logs.length ? '<div class="empty-state" style="padding:48px;text-align:center"><p>No outreach messages sent yet.</p></div>' : ''}
+    `;
+  }
+
+  // --- Bulk Outreach ---
+  function renderBulk(oc) {
+    const emailTemplates = templates.filter(t => t.channel === 'email');
+    const withEmail = influencers.filter(i => i.email);
+    const stages = ['lead', 'prospect', 'outreach', 'negotiation', 'contracted', 'completed'];
+    let bulkSelected = new Set();
+
+    oc.innerHTML = `
+      <div class="card" style="padding:20px;margin-bottom:16px">
+        <h3 style="margin-bottom:12px">Bulk Email Outreach</h3>
+        <p style="color:var(--text-muted);font-size:13px;margin-bottom:16px">Select influencers by stage filter or individually, pick a template, and send personalized emails to all of them at once.</p>
+        <div class="form-row">
+          <div class="form-group"><label class="form-label">Filter by Stage</label>
+            <select class="form-select" id="bulk-stage-filter">
+              <option value="">All stages</option>
+              ${stages.map(s => `<option value="${s}">${s}</option>`).join('')}
+            </select>
+          </div>
+          <div class="form-group"><label class="form-label">Email Template</label>
+            <select class="form-select" id="bulk-tpl">
+              <option value="">Select template...</option>
+              ${emailTemplates.map(t => `<option value="${t.id}">${t.name}</option>`).join('')}
+            </select>
+          </div>
+        </div>
+        <div id="bulk-preview" style="display:none;padding:12px;background:var(--bg);border-radius:8px;margin-bottom:16px;font-size:13px"></div>
+      </div>
+      <div class="table-wrapper"><table>
+        <thead><tr>
+          <th style="width:36px"><input type="checkbox" id="bulk-select-all"></th>
+          <th>Name</th><th>Email</th><th>Stage</th><th>Platform</th>
+        </tr></thead>
+        <tbody id="bulk-tbody">${withEmail.map(i => `<tr data-stage="${i.pipeline_stage}">
+          <td><input type="checkbox" class="bulk-cb" value="${i.id}"></td>
+          <td><strong>${i.name}</strong></td>
+          <td style="font-size:12px">${i.email}</td>
+          <td>${badgeHTML(i.pipeline_stage)}</td>
+          <td>${i.platform || '—'}</td>
+        </tr>`).join('')}</tbody>
+      </table></div>
+      <div style="margin-top:16px;display:flex;justify-content:space-between;align-items:center">
+        <span id="bulk-count" style="color:var(--text-muted)">0 selected</span>
+        <button class="btn btn-primary" id="bulk-send-btn" disabled><i data-lucide="send"></i> Send to Selected</button>
+      </div>
+    `;
+    lucide.createIcons({ nameAttr: 'data-lucide' });
+
+    // Stage filter
+    $('#bulk-stage-filter').onchange = () => {
+      const stage = $('#bulk-stage-filter').value;
+      $$('#bulk-tbody tr').forEach(tr => {
+        tr.style.display = (!stage || tr.dataset.stage === stage) ? '' : 'none';
+      });
+    };
+
+    // Template preview
+    $('#bulk-tpl').onchange = () => {
+      const tpl = templates.find(t => t.id == $('#bulk-tpl').value);
+      if (tpl) {
+        $('#bulk-preview').style.display = '';
+        $('#bulk-preview').innerHTML = `<strong>Subject:</strong> ${escapeHtml(tpl.subject || '(none)')}<br><strong>Preview:</strong> ${escapeHtml(tpl.body?.replace(/<[^>]*>/g, '').substring(0, 200))}...<br><div style="margin-top:4px;font-size:11px;color:var(--accent)">Merge tags ({{name}}, {{handle}}, etc.) will be personalized per influencer.</div>`;
+      } else {
+        $('#bulk-preview').style.display = 'none';
+      }
+    };
+
+    // Checkboxes
+    function updateBulkCount() {
+      $('#bulk-count').textContent = `${bulkSelected.size} selected`;
+      $('#bulk-send-btn').disabled = !bulkSelected.size || !$('#bulk-tpl').value;
+    }
+    $$('.bulk-cb').forEach(cb => {
+      cb.onchange = () => { if (cb.checked) bulkSelected.add(cb.value); else bulkSelected.delete(cb.value); updateBulkCount(); };
+    });
+    $('#bulk-select-all').onchange = () => {
+      const checked = $('#bulk-select-all').checked;
+      $$('.bulk-cb').forEach(cb => {
+        if (cb.closest('tr').style.display !== 'none') {
+          cb.checked = checked;
+          if (checked) bulkSelected.add(cb.value); else bulkSelected.delete(cb.value);
+        }
+      });
+      updateBulkCount();
+    };
+
+    // Send bulk
+    $('#bulk-send-btn').onclick = async () => {
+      const tpl = templates.find(t => t.id == $('#bulk-tpl').value);
+      if (!tpl) return toast('Select a template', 'error');
+      if (!bulkSelected.size) return toast('Select influencers', 'error');
+
+      const count = bulkSelected.size;
+      openConfirm('Send Bulk Emails', `Send personalized emails to ${count} influencer(s) using the "${tpl.name}" template?`, async () => {
+        let sent = 0, failed = 0;
+        for (const id of bulkSelected) {
+          const inf = infMap[parseInt(id)];
+          if (!inf?.email) { failed++; continue; }
+          const subject = mergeVars(tpl.subject, inf);
+          const body = mergeVars(tpl.body, inf);
+          try {
+            const res = await fetch('/api/send-email', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ to: inf.email, subject, body }),
+            });
+            const result = await res.json();
+            if (result.error) throw new Error(result.error);
+            await sb.from('outreach_log').insert({
+              influencer_id: inf.id, channel: 'email', recipient: inf.email,
+              subject, body, status: 'sent', sent_by: currentUser?.id, template_id: tpl.id,
+            });
+            await sb.from('influencers').update({ last_contacted: new Date().toISOString() }).eq('id', inf.id);
+            sent++;
+          } catch (err) {
+            failed++;
+            await sb.from('outreach_log').insert({
+              influencer_id: inf.id, channel: 'email', recipient: inf.email,
+              subject, body, status: 'failed', sent_by: currentUser?.id, error_message: err.message,
+            });
+          }
+        }
+        toast(`Sent: ${sent}, Failed: ${failed}`, sent > 0 ? 'success' : 'error');
+        await logActivity('bulk_outreach', `Bulk email sent to ${sent} influencers`);
+        infActiveTab = 'outreach';
+        navigate('influencers');
+      });
+    };
+  }
+
+  renderOutreach();
+}
+
+// Template CRUD
+window.editOutreachTemplate = async function(id) {
+  let tpl = {};
+  if (id) {
+    const { data } = await sb.from('outreach_templates').select('*').eq('id', id).single();
+    tpl = data || {};
+  }
+  openModal(id ? 'Edit Template' : 'New Outreach Template', `
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">Template Name</label><input class="form-input" id="tpl-name" value="${tpl.name || ''}"></div>
+      <div class="form-group"><label class="form-label">Channel</label>
+        <select class="form-select" id="tpl-channel">
+          ${['email', 'sms', 'dm'].map(c => `<option value="${c}" ${tpl.channel === c ? 'selected' : ''}>${c.toUpperCase()}</option>`).join('')}
+        </select>
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">Category</label>
+        <select class="form-select" id="tpl-category">
+          ${['initial_outreach', 'follow_up', 'collaboration', 'gifting', 'thank_you', 're_engage', 'general'].map(c => `<option value="${c}" ${tpl.category === c ? 'selected' : ''}>${c.replace(/_/g, ' ')}</option>`).join('')}
+        </select>
+      </div>
+    </div>
+    <div class="form-group" id="tpl-subject-wrap"><label class="form-label">Subject (email only)</label><input class="form-input" id="tpl-subject" value="${tpl.subject || ''}"></div>
+    <div class="form-group"><label class="form-label">Message Body</label><textarea class="form-textarea" id="tpl-body" rows="6">${tpl.body || ''}</textarea></div>
+    <div style="font-size:11px;color:var(--text-muted)">Merge tags: <code>{{name}}</code> <code>{{handle}}</code> <code>{{brand}}</code> <code>{{sender_name}}</code> <code>{{rate}}</code></div>
+  `, `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button><button class="btn btn-primary" id="save-tpl-btn">Save</button>`);
+
+  $('#tpl-channel').onchange = () => {
+    $('#tpl-subject-wrap').style.display = $('#tpl-channel').value === 'email' ? '' : 'none';
+  };
+  $('#tpl-channel').dispatchEvent(new Event('change'));
+
+  $('#save-tpl-btn').onclick = async () => {
+    const obj = {
+      name: $('#tpl-name').value,
+      channel: $('#tpl-channel').value,
+      category: $('#tpl-category').value,
+      subject: $('#tpl-subject').value || null,
+      body: $('#tpl-body').value,
+      created_by: currentUser?.id,
+      updated_at: new Date().toISOString(),
+    };
+    if (!obj.name || !obj.body) return toast('Name and body required', 'error');
+    if (id) {
+      await sb.from('outreach_templates').update(obj).eq('id', id);
+    } else {
+      await sb.from('outreach_templates').insert(obj);
+    }
+    closeModal();
+    toast(id ? 'Template updated' : 'Template created', 'success');
+    infActiveTab = 'outreach';
+    navigate('influencers');
+  };
+};
+
+window.deleteOutreachTemplate = function(id) {
+  openConfirm('Delete Template', 'Are you sure?', async () => {
+    await sb.from('outreach_templates').delete().eq('id', id);
+    toast('Deleted', 'success');
+    infActiveTab = 'outreach';
+    navigate('influencers');
+  });
+};
+
+// Quick-contact modals (from pipeline row)
+window.quickEmail = async function(id) {
+  const { data: inf } = await sb.from('influencers').select('*').eq('id', id).single();
+  if (!inf?.email) return toast('No email for this influencer', 'error');
+  const { data: templates } = await sb.from('outreach_templates').select('*').eq('channel', 'email').order('created_at');
+  const tpls = templates || [];
+
+  openModal(`Email ${inf.name}`, `
+    <div class="form-group"><label class="form-label">To</label><input class="form-input" value="${inf.email}" readonly></div>
+    <div class="form-group"><label class="form-label">Template</label>
+      <select class="form-select" id="qe-tpl">
+        <option value="">Custom...</option>
+        ${tpls.map(t => `<option value="${t.id}">${t.name}</option>`).join('')}
+      </select>
+    </div>
+    <div class="form-group"><label class="form-label">Subject</label><input class="form-input" id="qe-subject"></div>
+    <div class="form-group"><label class="form-label">Message</label><textarea class="form-textarea" id="qe-body" rows="5"></textarea></div>
+  `, `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button><button class="btn btn-primary" id="qe-send"><i data-lucide="send"></i> Send</button>`);
+  lucide.createIcons({ nameAttr: 'data-lucide' });
+
+  const mergeVarsLocal = (text) => (text || '').replace(/\{\{name\}\}/g, inf.name || '').replace(/\{\{handle\}\}/g, inf.handle ? '@' + inf.handle.replace(/^@/,'') : '').replace(/\{\{sender_name\}\}/g, currentUser?.name || '').replace(/\{\{brand\}\}/g, '').replace(/\{\{rate\}\}/g, inf.rate ? '$' + Number(inf.rate).toLocaleString() : 'TBD');
+  $('#qe-tpl').onchange = () => {
+    const tpl = tpls.find(t => t.id == $('#qe-tpl').value);
+    if (tpl) { $('#qe-subject').value = mergeVarsLocal(tpl.subject); $('#qe-body').value = mergeVarsLocal(tpl.body?.replace(/<[^>]*>/g, '')); }
+  };
+
+  $('#qe-send').onclick = async () => {
+    const subject = $('#qe-subject').value;
+    const body = $('#qe-body').value;
+    if (!subject || !body) return toast('Subject and message required', 'error');
+    $('#qe-send').disabled = true;
+    try {
+      const res = await fetch('/api/send-email', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ to: inf.email, subject, body: body.replace(/\n/g, '<br>') }) });
+      const result = await res.json();
+      if (result.error) throw new Error(result.error);
+      await sb.from('outreach_log').insert({ influencer_id: inf.id, channel: 'email', recipient: inf.email, subject, body, status: 'sent', sent_by: currentUser?.id });
+      await sb.from('influencers').update({ last_contacted: new Date().toISOString() }).eq('id', inf.id);
+      await sb.from('influencer_interactions').insert({ influencer_id: inf.id, type: 'email', subject, notes: `Sent: ${subject}`, employee_id: currentUser?.id });
+      closeModal(); toast('Email sent!', 'success');
+    } catch (err) { toast('Failed: ' + err.message, 'error'); }
+    $('#qe-send').disabled = false;
+  };
+};
+
+window.quickSMS = async function(id) {
+  const { data: inf } = await sb.from('influencers').select('*').eq('id', id).single();
+  if (!inf?.phone) return toast('No phone for this influencer', 'error');
+
+  openModal(`Text ${inf.name}`, `
+    <div class="form-group"><label class="form-label">To</label><input class="form-input" value="${inf.phone}" readonly></div>
+    <div class="form-group"><label class="form-label">Message</label><textarea class="form-textarea" id="qs-body" rows="4"></textarea></div>
+    <div style="font-size:11px;color:var(--text-muted)"><span id="qs-chars">0</span>/160 characters</div>
+  `, `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button><button class="btn btn-primary" id="qs-send" style="background:var(--success)"><i data-lucide="send"></i> Send SMS</button>`);
+  lucide.createIcons({ nameAttr: 'data-lucide' });
+  $('#qs-body').oninput = () => { $('#qs-chars').textContent = $('#qs-body').value.length; };
+
+  $('#qs-send').onclick = async () => {
+    const body = $('#qs-body').value;
+    if (!body) return toast('Message required', 'error');
+    $('#qs-send').disabled = true;
+    try {
+      const res = await fetch('/api/sms?action=send', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ to: inf.phone, body }) });
+      const result = await res.json();
+      if (result.error) throw new Error(result.error);
+      await sb.from('outreach_log').insert({ influencer_id: inf.id, channel: 'sms', recipient: inf.phone, body, status: 'sent', sent_by: currentUser?.id });
+      await sb.from('influencers').update({ last_contacted: new Date().toISOString() }).eq('id', inf.id);
+      await sb.from('influencer_interactions').insert({ influencer_id: inf.id, type: 'dm', subject: 'SMS', notes: `Sent SMS: ${body.substring(0, 100)}`, employee_id: currentUser?.id });
+      closeModal(); toast('SMS sent!', 'success');
+    } catch (err) { toast('Failed: ' + err.message, 'error'); }
+    $('#qs-send').disabled = false;
+  };
+};
+
+window.quickDM = async function(id) {
+  const { data: inf } = await sb.from('influencers').select('*').eq('id', id).single();
+  if (!inf?.handle) return toast('No handle for this influencer', 'error');
+  const { data: tpls } = await sb.from('outreach_templates').select('*').eq('channel', 'dm');
+  const templates = tpls || [];
+  const mergeVarsLocal = (text) => (text || '').replace(/\{\{name\}\}/g, inf.name || '').replace(/\{\{handle\}\}/g, '@' + (inf.handle || '').replace(/^@/,'')).replace(/\{\{sender_name\}\}/g, currentUser?.name || '').replace(/\{\{brand\}\}/g, '');
+
+  openModal(`DM Script for ${inf.name}`, `
+    <div style="margin-bottom:12px;color:var(--text-muted);font-size:13px">Profile: <a href="${socialProfileUrl(inf.platform, inf.handle)}" target="_blank" style="color:var(--accent)">@${(inf.handle||'').replace(/^@/,'')}</a> on ${inf.platform}</div>
+    <div class="form-group"><label class="form-label">Template</label>
+      <select class="form-select" id="qd-tpl">
+        <option value="">Custom...</option>
+        ${templates.map(t => `<option value="${t.id}">${t.name}</option>`).join('')}
+      </select>
+    </div>
+    <div class="form-group"><label class="form-label">Message</label><textarea class="form-textarea" id="qd-body" rows="5"></textarea></div>
+  `, `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button><button class="btn btn-primary" id="qd-copy" style="background:#e1306c"><i data-lucide="copy"></i> Copy & Open Profile</button>`);
+  lucide.createIcons({ nameAttr: 'data-lucide' });
+
+  $('#qd-tpl').onchange = () => {
+    const tpl = templates.find(t => t.id == $('#qd-tpl').value);
+    if (tpl) $('#qd-body').value = mergeVarsLocal(tpl.body);
+  };
+
+  $('#qd-copy').onclick = async () => {
+    const body = $('#qd-body').value;
+    if (!body) return toast('Write a message first', 'error');
+    try { await navigator.clipboard.writeText(body); } catch {}
+    window.open(socialProfileUrl(inf.platform, inf.handle), '_blank');
+    await sb.from('outreach_log').insert({ influencer_id: inf.id, channel: 'dm_copy', body, status: 'sent', sent_by: currentUser?.id });
+    await sb.from('influencer_interactions').insert({ influencer_id: inf.id, type: 'dm', subject: 'DM Outreach', notes: `Copied DM: ${body.substring(0, 100)}`, employee_id: currentUser?.id });
+    closeModal(); toast('Copied! Profile opened in new tab.', 'success');
+  };
+};
+
 // ---- Influencer Profile View ----
 window.viewInfluencerProfile = async function(id) {
   const [infRes, postsRes, paymentsRes, interactionsRes, milestonesRes] = await Promise.all([
@@ -2164,7 +2792,8 @@ window.viewInfluencerProfile = async function(id) {
         ${int.notes ? `<div style="color:var(--text-muted);font-size:12px;margin-top:2px">${escapeHtml(int.notes)}</div>` : ''}
       </div>
     `).join('')}</div>` : ''}
-  `, `<button class="btn btn-secondary" onclick="closeModal()">Close</button><button class="btn btn-primary" onclick="editInfluencer('${id}')">Edit</button>`);
+  `, `<button class="btn btn-secondary" onclick="closeModal()">Close</button>${inf.email ? `<button class="btn btn-accent btn-sm" onclick="closeModal();quickEmail('${id}')" style="background:var(--accent)"><i data-lucide="mail" style="width:14px;height:14px"></i> Email</button>` : ''}${inf.phone ? `<button class="btn btn-sm" onclick="closeModal();quickSMS('${id}')" style="background:var(--success);color:#fff"><i data-lucide="smartphone" style="width:14px;height:14px"></i> SMS</button>` : ''}${inf.handle ? `<button class="btn btn-sm" onclick="closeModal();quickDM('${id}')" style="background:#e1306c;color:#fff"><i data-lucide="message-circle" style="width:14px;height:14px"></i> DM</button>` : ''}<button class="btn btn-primary" onclick="editInfluencer('${id}')">Edit</button>`);
+  lucide.createIcons({ nameAttr: 'data-lucide' });
 };
 
 // ---- Edit/Add Influencer Modal ----
