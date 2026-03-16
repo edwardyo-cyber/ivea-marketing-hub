@@ -4659,7 +4659,7 @@ window.editEmployee = async function(id) {
     const { data } = await sb.from('employees').select('*').eq('id', id).single();
     e = data || {};
   }
-  const roles = ['Owner', 'Marketing Director', 'Content Manager', 'Content Creator', 'Social Media Manager', 'Social Media Coordinator', 'Brand Manager', 'Viewer'];
+  const roles = ['Owner', 'Marketing Director', 'Marketing Manager', 'Marketing Coordinator', 'Marketing Analyst', 'Content Manager', 'Content Creator', 'Content Strategist', 'Social Media Manager', 'Social Media Coordinator', 'Social Media Specialist', 'Brand Manager', 'Brand Strategist', 'Community Manager', 'Influencer Relations Manager', 'PR Manager', 'PR Coordinator', 'SEO Specialist', 'Paid Media Specialist', 'Email Marketing Specialist', 'Graphic Designer', 'Video Producer', 'Copywriter', 'Campaign Manager', 'Growth Manager', 'Digital Marketing Manager', 'Account Manager', 'Intern', 'Viewer'];
   const colors = ['#4f98a3', '#ef4444', '#22c55e', '#f59e0b', '#8b5cf6', '#3b82f6', '#ec4899'];
   openModal(id ? 'Edit Team Member' : 'Add Team Member', `
     <div class="form-row">
