@@ -1435,13 +1435,39 @@ async function renderInfPipeline(container) {
     function updateBulk() {
       const bar = $('#inf-bulk-bar');
       if (!selected.size) { bar.innerHTML = ''; return; }
-      bar.innerHTML = `<div class="bulk-bar">${selected.size} selected
-        <select class="form-select" style="width:150px;margin-left:8px" id="bulk-stage-sel">
+      const selItems = items.filter(i => selected.has(String(i.id)));
+      const withEmail = selItems.filter(i => i.email);
+      const withPhone = selItems.filter(i => i.phone);
+      const withHandle = selItems.filter(i => i.handle);
+      bar.innerHTML = `<div class="bulk-bar" style="display:flex;align-items:center;flex-wrap:wrap;gap:8px">
+        <strong>${selected.size} selected</strong>
+        <button class="btn btn-accent btn-sm" id="bulk-email-inf" ${!withEmail.length ? 'disabled title="No selected influencers have email"' : ''}><i data-lucide="mail" style="width:14px;height:14px"></i> Email (${withEmail.length})</button>
+        <button class="btn btn-sm" id="bulk-sms-inf" style="background:#22c55e;color:#fff" ${!withPhone.length ? 'disabled title="No selected influencers have phone"' : ''}><i data-lucide="smartphone" style="width:14px;height:14px"></i> SMS (${withPhone.length})</button>
+        <button class="btn btn-sm" id="bulk-dm-inf" style="background:#e1306c;color:#fff" ${!withHandle.length ? 'disabled title="No selected influencers have handle"' : ''}><i data-lucide="message-circle" style="width:14px;height:14px"></i> DM Scripts (${withHandle.length})</button>
+        <select class="form-select" style="width:150px" id="bulk-stage-sel">
           <option value="">Change Stage...</option>
           ${stages.map(s => `<option value="${s}">${s}</option>`).join('')}
         </select>
         <button class="btn btn-danger btn-sm" id="bulk-delete-inf">Delete</button>
       </div>`;
+      lucide.createIcons({ nameAttr: 'data-lucide' });
+
+      // Bulk Email
+      $('#bulk-email-inf').onclick = () => {
+        if (!withEmail.length) return;
+        openBulkInfluencerEmail(withEmail);
+      };
+      // Bulk SMS
+      $('#bulk-sms-inf').onclick = () => {
+        if (!withPhone.length) return;
+        openBulkInfluencerSMS(withPhone);
+      };
+      // Bulk DM
+      $('#bulk-dm-inf').onclick = () => {
+        if (!withHandle.length) return;
+        openBulkInfluencerDM(withHandle);
+      };
+
       $('#bulk-stage-sel').onchange = async function() {
         if (!this.value) return;
         for (const id of selected) await sb.from('influencers').update({ pipeline_stage: this.value }).eq('id', id);
@@ -2752,6 +2778,173 @@ window.quickDM = async function(id) {
     closeModal(); toast('Copied! Profile opened in new tab.', 'success');
   };
 };
+
+// ---- Bulk Messaging from Pipeline ----
+async function openBulkInfluencerEmail(influencers) {
+  const { data: tpls } = await sb.from('outreach_templates').select('*').eq('channel', 'email').order('created_at');
+  const templates = tpls || [];
+  const mergeVars = (text, inf) => (text || '').replace(/\{\{name\}\}/g, inf.name || '').replace(/\{\{handle\}\}/g, inf.handle ? '@' + inf.handle.replace(/^@/,'') : '').replace(/\{\{sender_name\}\}/g, currentUser?.name || '').replace(/\{\{brand\}\}/g, '').replace(/\{\{rate\}\}/g, inf.rate ? '$' + Number(inf.rate).toLocaleString() : 'TBD');
+
+  openModal(`Email ${influencers.length} Influencers`, `
+    <div class="form-group">
+      <label class="form-label">To (${influencers.length} influencer${influencers.length > 1 ? 's' : ''})</label>
+      <div style="background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:8px 12px;font-size:13px;max-height:100px;overflow-y:auto;line-height:1.8">
+        ${influencers.map(i => `<span class="badge" style="margin:2px 4px 2px 0;font-size:11px">${i.name} &lt;${i.email}&gt;</span>`).join(' ')}
+      </div>
+    </div>
+    <div class="form-group"><label class="form-label">Template</label>
+      <select class="form-select" id="be-tpl">
+        <option value="">Custom...</option>
+        ${templates.map(t => `<option value="${t.id}">${t.name}</option>`).join('')}
+      </select>
+    </div>
+    <div class="form-group"><label class="form-label">Subject</label><input class="form-input" id="be-subject" placeholder="Subject line (merge tags: {{name}}, {{handle}})"></div>
+    <div class="form-group"><label class="form-label">Message</label><textarea class="form-textarea" id="be-body" rows="8" placeholder="Write your message... Merge tags will be personalized per recipient."></textarea></div>
+    <div style="font-size:12px;color:var(--text-muted)">Each email is personalized with merge tags and sent individually via SMTP.</div>
+  `, `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button><button class="btn btn-primary" id="be-send"><i data-lucide="send"></i> Send All</button>`);
+  lucide.createIcons({ nameAttr: 'data-lucide' });
+
+  $('#be-tpl').onchange = () => {
+    const tpl = templates.find(t => t.id == $('#be-tpl').value);
+    if (tpl) {
+      $('#be-subject').value = tpl.subject || '';
+      $('#be-body').value = (tpl.body || '').replace(/<[^>]*>/g, '');
+    }
+  };
+
+  $('#be-send').onclick = async () => {
+    const subject = $('#be-subject').value.trim();
+    const body = $('#be-body').value.trim();
+    if (!subject || !body) return toast('Subject and message required', 'error');
+    const btn = $('#be-send');
+    btn.disabled = true; btn.textContent = 'Sending...';
+    let sent = 0, failed = 0;
+    for (const inf of influencers) {
+      try {
+        const personalSubject = mergeVars(subject, inf);
+        const personalBody = mergeVars(body, inf).replace(/\n/g, '<br>');
+        const res = await fetch('/api/outreach?action=send_email', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ to: inf.email, subject: personalSubject, body: personalBody }) });
+        const result = await res.json();
+        if (result.error) throw new Error(result.error);
+        await sb.from('outreach_log').insert({ influencer_id: inf.id, channel: 'email', recipient: inf.email, subject: personalSubject, body: personalBody, status: 'sent', sent_by: currentUser?.id });
+        await sb.from('influencers').update({ last_contacted: new Date().toISOString() }).eq('id', inf.id);
+        sent++;
+      } catch { failed++; }
+    }
+    closeModal();
+    toast(`Sent: ${sent}, Failed: ${failed}`, sent > 0 ? 'success' : 'error');
+    await logActivity('bulk_email', `Bulk email to ${sent} influencers: ${subject}`);
+  };
+}
+
+async function openBulkInfluencerSMS(influencers) {
+  const { data: tpls } = await sb.from('outreach_templates').select('*').eq('channel', 'sms').order('created_at');
+  const templates = tpls || [];
+  const mergeVars = (text, inf) => (text || '').replace(/\{\{name\}\}/g, inf.name || '').replace(/\{\{handle\}\}/g, inf.handle ? '@' + inf.handle.replace(/^@/,'') : '').replace(/\{\{sender_name\}\}/g, currentUser?.name || '').replace(/\{\{brand\}\}/g, '').replace(/\{\{rate\}\}/g, inf.rate ? '$' + Number(inf.rate).toLocaleString() : 'TBD');
+
+  openModal(`SMS ${influencers.length} Influencers`, `
+    <div class="form-group">
+      <label class="form-label">To (${influencers.length} influencer${influencers.length > 1 ? 's' : ''})</label>
+      <div style="background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:8px 12px;font-size:13px;max-height:100px;overflow-y:auto;line-height:1.8">
+        ${influencers.map(i => `<span class="badge" style="margin:2px 4px 2px 0;font-size:11px">${i.name} — ${i.phone}</span>`).join(' ')}
+      </div>
+    </div>
+    <div class="form-group"><label class="form-label">Template</label>
+      <select class="form-select" id="bs-tpl">
+        <option value="">Custom...</option>
+        ${templates.map(t => `<option value="${t.id}">${t.name}</option>`).join('')}
+      </select>
+    </div>
+    <div class="form-group"><label class="form-label">Message</label><textarea class="form-textarea" id="bs-body" rows="4" placeholder="Write your message... Merge tags will be personalized per recipient."></textarea></div>
+    <div style="font-size:12px;color:var(--text-muted)"><span id="bs-chars">0</span>/160 chars — Each SMS is personalized and sent individually via Twilio.</div>
+  `, `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button><button class="btn btn-primary" id="bs-send" style="background:var(--success)"><i data-lucide="send"></i> Send All</button>`);
+  lucide.createIcons({ nameAttr: 'data-lucide' });
+
+  $('#bs-body').oninput = () => { $('#bs-chars').textContent = $('#bs-body').value.length; };
+  $('#bs-tpl').onchange = () => {
+    const tpl = templates.find(t => t.id == $('#bs-tpl').value);
+    if (tpl) $('#bs-body').value = tpl.body || '';
+  };
+
+  $('#bs-send').onclick = async () => {
+    const body = $('#bs-body').value.trim();
+    if (!body) return toast('Message required', 'error');
+    const btn = $('#bs-send');
+    btn.disabled = true; btn.textContent = 'Sending...';
+    let sent = 0, failed = 0;
+    for (const inf of influencers) {
+      try {
+        const personalBody = mergeVars(body, inf);
+        const res = await fetch('/api/outreach?action=send', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ to: inf.phone, body: personalBody }) });
+        const result = await res.json();
+        if (result.error) throw new Error(result.error);
+        await sb.from('outreach_log').insert({ influencer_id: inf.id, channel: 'sms', recipient: inf.phone, body: personalBody, status: 'sent', sent_by: currentUser?.id });
+        await sb.from('influencers').update({ last_contacted: new Date().toISOString() }).eq('id', inf.id);
+        sent++;
+      } catch { failed++; }
+    }
+    closeModal();
+    toast(`Sent: ${sent}, Failed: ${failed}`, sent > 0 ? 'success' : 'error');
+    await logActivity('bulk_sms', `Bulk SMS to ${sent} influencers`);
+  };
+}
+
+async function openBulkInfluencerDM(influencers) {
+  const { data: tpls } = await sb.from('outreach_templates').select('*').eq('channel', 'dm').order('created_at');
+  const templates = tpls || [];
+  const mergeVars = (text, inf) => (text || '').replace(/\{\{name\}\}/g, inf.name || '').replace(/\{\{handle\}\}/g, inf.handle ? '@' + inf.handle.replace(/^@/,'') : '').replace(/\{\{sender_name\}\}/g, currentUser?.name || '').replace(/\{\{brand\}\}/g, '');
+
+  openModal(`DM Scripts for ${influencers.length} Influencers`, `
+    <div class="form-group">
+      <label class="form-label">Influencers (${influencers.length})</label>
+      <div style="background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:8px 12px;font-size:13px;max-height:100px;overflow-y:auto;line-height:1.8">
+        ${influencers.map(i => `<span class="badge" style="margin:2px 4px 2px 0;font-size:11px">${i.name} — @${(i.handle||'').replace(/^@/,'')}</span>`).join(' ')}
+      </div>
+    </div>
+    <div class="form-group"><label class="form-label">Template</label>
+      <select class="form-select" id="bd-tpl">
+        <option value="">Custom...</option>
+        ${templates.map(t => `<option value="${t.id}">${t.name}</option>`).join('')}
+      </select>
+    </div>
+    <div class="form-group"><label class="form-label">Message Template</label><textarea class="form-textarea" id="bd-body" rows="4" placeholder="Write DM message... Merge tags personalize per influencer."></textarea></div>
+    <div style="font-size:12px;color:var(--text-muted);margin-bottom:12px">Click "Generate Scripts" to get personalized DM scripts for each influencer + links to their profiles.</div>
+    <div id="bd-scripts"></div>
+  `, `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button><button class="btn btn-primary" id="bd-gen" style="background:#e1306c"><i data-lucide="copy"></i> Generate Scripts</button>`);
+  lucide.createIcons({ nameAttr: 'data-lucide' });
+
+  $('#bd-tpl').onchange = () => {
+    const tpl = templates.find(t => t.id == $('#bd-tpl').value);
+    if (tpl) $('#bd-body').value = tpl.body || '';
+  };
+
+  $('#bd-gen').onclick = async () => {
+    const body = $('#bd-body').value.trim();
+    if (!body) return toast('Write a message template first', 'error');
+    const scripts = $('#bd-scripts');
+    scripts.innerHTML = influencers.map(inf => {
+      const msg = mergeVars(body, inf);
+      return `<div style="background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:8px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+          <strong>${inf.name}</strong>
+          <a href="${socialProfileUrl(inf.platform, inf.handle)}" target="_blank" class="btn btn-sm" style="background:#e1306c;color:#fff;font-size:11px">Open @${(inf.handle||'').replace(/^@/,'')} Profile</a>
+        </div>
+        <div style="background:var(--bg);padding:8px;border-radius:6px;font-size:13px;margin-bottom:6px">${msg}</div>
+        <button class="btn btn-secondary btn-sm bd-copy" data-msg="${msg.replace(/"/g, '&quot;')}" data-id="${inf.id}" style="font-size:11px"><i data-lucide="copy" style="width:12px;height:12px"></i> Copy</button>
+      </div>`;
+    }).join('');
+    lucide.createIcons({ nameAttr: 'data-lucide' });
+    $$('.bd-copy').forEach(btn => {
+      btn.onclick = async () => {
+        try { await navigator.clipboard.writeText(btn.dataset.msg); } catch {}
+        await sb.from('outreach_log').insert({ influencer_id: parseInt(btn.dataset.id), channel: 'dm_copy', body: btn.dataset.msg, status: 'sent', sent_by: currentUser?.id });
+        btn.textContent = 'Copied!'; btn.style.color = 'var(--success)';
+        setTimeout(() => { btn.innerHTML = '<i data-lucide="copy" style="width:12px;height:12px"></i> Copy'; lucide.createIcons({ nameAttr: 'data-lucide' }); }, 2000);
+      };
+    });
+    await logActivity('bulk_dm_scripts', `Generated DM scripts for ${influencers.length} influencers`);
+  };
+}
 
 // ---- Influencer Profile View ----
 window.viewInfluencerProfile = async function(id) {
