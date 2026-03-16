@@ -617,6 +617,7 @@ async function renderRestaurantDetail(container, id) {
       </div>
       ${canEdit() ? `<div style="display:flex;gap:8px">
         <button class="btn btn-secondary btn-sm" onclick="editRestaurant('${id}')"><i data-lucide="edit-2"></i> Edit Brand</button>
+        <button class="btn btn-danger btn-sm" onclick="deleteRestaurant('${id}')"><i data-lucide="trash-2"></i> Delete Brand</button>
         <button class="btn btn-primary btn-sm" id="add-location-btn"><i data-lucide="plus"></i> Add Location</button>
       </div>` : ''}
     </div>
