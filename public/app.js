@@ -237,6 +237,8 @@ const NAV_ITEMS = [
   ]},
   { section: 'Outreach', items: [
     { id: 'influencers', icon: 'users', label: 'Influencers' },
+    { id: 'gifting', icon: 'gift', label: 'Gifting & Comps' },
+    { id: 'events', icon: 'calendar-check', label: 'Events & Tastings' },
     { id: 'campaigns', icon: 'megaphone', label: 'Campaigns' },
     { id: 'media', icon: 'newspaper', label: 'Local Media' },
     { id: 'email-sms', icon: 'mail', label: 'Email & SMS' },
@@ -255,6 +257,7 @@ const NAV_ITEMS = [
   { section: 'Analytics', items: [
     { id: 'reports', icon: 'bar-chart-3', label: 'Reports' },
     { id: 'social-accounts', icon: 'share-2', label: 'Social Accounts' },
+    { id: 'hashtags', icon: 'hash', label: 'Hashtag Tracker' },
   ]},
   { section: 'Management', items: [
     { id: 'team', icon: 'user-cog', label: 'Team' },
@@ -350,6 +353,9 @@ function navigate(page) {
     'loyalty': renderLoyalty,
     'reports': renderReports,
     'social-accounts': renderSocialAccounts,
+    'gifting': renderGifting,
+    'events': renderEvents,
+    'hashtags': renderHashtags,
     'team': renderTeam,
     'audit-log': renderAuditLog,
     'settings': renderSettings,
@@ -4173,6 +4179,7 @@ async function renderReviews(container) {
         <div style="margin-left:auto;display:flex;gap:8px">
           <button class="btn btn-secondary btn-sm sync-btn" id="rev-sync-google" onclick="syncGoogleReviews()"><i data-lucide="refresh-cw"></i> Sync Google Reviews</button>
           <button class="btn btn-secondary btn-sm" id="rev-export"><i data-lucide="download"></i> Export</button>
+          <button class="btn btn-secondary btn-sm" id="rev-bulk-ai-draft" style="display:none"><i data-lucide="sparkles"></i> Bulk AI Draft</button>
           <button class="btn btn-secondary btn-sm" id="rev-bulk-respond" style="display:none"><i data-lucide="check-circle"></i> Bulk Respond</button>
         </div>
       </div>
@@ -4198,7 +4205,11 @@ async function renderReviews(container) {
                 ${responseText}
               </div>
             ` : `
-              <button class="btn btn-sm btn-primary mt-2" onclick="respondToReview('${r.id}')">Respond</button>
+              <div style="display:flex;gap:6px;margin-top:8px">
+                <button class="btn btn-sm btn-primary" onclick="respondToReview('${r.id}')">Respond</button>
+                <button class="btn btn-sm btn-secondary" onclick="aiDraftReviewResponse('${r.id}')"><i data-lucide="sparkles" style="width:14px;height:14px"></i> AI Draft</button>
+              </div>
+              ${r.ai_draft_response ? `<div style="margin-top:6px;padding:8px;background:var(--bg-tertiary);border-radius:6px;font-size:12px;color:var(--text-secondary)"><strong>Saved draft:</strong> ${r.ai_draft_response.substring(0,80)}...</div>` : ''}
             `}
           </div>`;
         }).join('')}
@@ -4216,7 +4227,9 @@ async function renderReviews(container) {
     $$('.rev-check').forEach(cb => {
       cb.onchange = () => {
         if (cb.checked) selected.add(cb.value); else selected.delete(cb.value);
-        $('#rev-bulk-respond').style.display = selected.size > 0 ? '' : 'none';
+        const show = selected.size > 0 ? '' : 'none';
+        $('#rev-bulk-respond').style.display = show;
+        $('#rev-bulk-ai-draft').style.display = show;
       };
     });
     $('#rev-bulk-respond').onclick = async () => {
@@ -4224,6 +4237,26 @@ async function renderReviews(container) {
         await sb.from('reviews').update({ status: 'responded', response_by: currentUser.id, response_date: new Date().toISOString().slice(0, 10) }).eq('id', id);
       }
       toast(`Marked ${selected.size} reviews as responded`, 'success');
+      selected.clear();
+      navigate('reviews');
+    };
+    $('#rev-bulk-ai-draft').onclick = async () => {
+      const btn = $('#rev-bulk-ai-draft');
+      btn.disabled = true; btn.innerHTML = '<i data-lucide="loader"></i> Generating...';
+      let count = 0;
+      for (const id of selected) {
+        const rev = items.find(r => String(r.id) === String(id));
+        if (!rev || rev.status === 'responded' || rev.is_responded) continue;
+        const rating = rev.rating || 3;
+        const restaurantName = rev.restaurant_name || rev.restaurant || 'our restaurant';
+        const reviewText = rev.review_text || rev.content || '';
+        const draft = await generateAIContent(`You are a restaurant manager responding to a ${rating}-star review for ${restaurantName}. The review says: "${reviewText}". Write a professional, warm response under 100 words.`, 200);
+        if (draft) {
+          await sb.from('reviews').update({ ai_draft_response: draft, response_tone: 'professional' }).eq('id', id);
+          count++;
+        }
+      }
+      toast(`Generated ${count} AI drafts`, 'success');
       selected.clear();
       navigate('reviews');
     };
@@ -4246,31 +4279,48 @@ window.respondToReview = async function(id) {
       <p style="color:var(--text-secondary);font-size:13px">${review.review_text || review.content || ''}</p>
     </div>` : ''}
     <div class="form-group"><label class="form-label">Your Response</label>
-    <textarea class="form-textarea" id="review-response" rows="4" placeholder="Write your response..."></textarea>
-    <button class="btn btn-sm ai-gen-btn" id="ai-gen-review" type="button"><i data-lucide="sparkles"></i> AI Suggest Response</button>
+    <textarea class="form-textarea" id="review-response" rows="4" placeholder="Write your response...">${review.ai_draft_response || ''}</textarea>
+    <div style="display:flex;gap:8px;align-items:center;margin-top:6px">
+      <select class="form-select" id="review-tone" style="width:160px">
+        <option value="professional" ${(review.response_tone || 'professional') === 'professional' ? 'selected' : ''}>Professional</option>
+        <option value="friendly" ${review.response_tone === 'friendly' ? 'selected' : ''}>Friendly</option>
+        <option value="apologetic" ${review.response_tone === 'apologetic' ? 'selected' : ''}>Apologetic</option>
+        <option value="enthusiastic" ${review.response_tone === 'enthusiastic' ? 'selected' : ''}>Enthusiastic</option>
+      </select>
+      <button class="btn btn-sm ai-gen-btn" id="ai-gen-review" type="button"><i data-lucide="sparkles"></i> AI Generate</button>
+    </div>
     </div>
   `, `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button><button class="btn btn-primary" id="save-response-btn">Submit Response</button>`);
   lucide.createIcons({ nameAttr: 'data-lucide' });
 
-  // AI Suggest handler
+  // AI Generate handler with tone
   $('#ai-gen-review').onclick = async () => {
     const btn = $('#ai-gen-review');
     btn.innerHTML = '<i data-lucide="loader"></i> Generating...';
     btn.disabled = true;
+    const tone = $('#review-tone').value;
     const rating = review.rating || 3;
     const restaurantName = review.restaurant_name || 'our restaurant';
     const reviewText = review.review_text || review.content || 'the customer experience';
+    const toneInstructions = {
+      professional: 'Use a professional, polished tone.',
+      friendly: 'Use a warm, casual, friendly tone like talking to a neighbor.',
+      apologetic: 'Lead with a sincere apology and express genuine concern.',
+      enthusiastic: 'Be upbeat and enthusiastic, showing excitement about their feedback.',
+    };
     const result = await generateAIContent(
       `You are a restaurant manager responding to a ${rating}-star review for ${restaurantName}.
 The review says: "${reviewText}"
-Write a professional, warm response. ${rating >= 4 ? 'Thank the customer genuinely and encourage them to return. Mention something specific from their review.' : 'Apologize sincerely, acknowledge the specific issue they raised, and offer to make it right. Invite them to contact us directly.'}
+${toneInstructions[tone] || toneInstructions.professional}
+${rating >= 4 ? 'Thank the customer genuinely and encourage them to return. Mention something specific from their review.' : 'Acknowledge the specific issue they raised, and offer to make it right. Invite them to contact us directly.'}
 Keep it under 100 words. Sound human, not corporate.`, 200
     );
-    btn.innerHTML = '<i data-lucide="sparkles"></i> AI Suggest Response';
+    btn.innerHTML = '<i data-lucide="sparkles"></i> AI Generate';
     btn.disabled = false;
     lucide.createIcons({ nameAttr: 'data-lucide' });
     if (result) {
       $('#review-response').value = result;
+      await sb.from('reviews').update({ ai_draft_response: result, response_tone: tone }).eq('id', id);
       toast('Response generated — review and edit before submitting', 'success');
     } else {
       toast('Failed to generate response', 'error');
@@ -4289,6 +4339,63 @@ Keep it under 100 words. Sound human, not corporate.`, 200
     await logActivity('respond_review', 'Responded to a review');
     closeModal();
     toast('Response submitted', 'success');
+    navigate('reviews');
+  };
+};
+
+window.aiDraftReviewResponse = async function(id) {
+  const { data: review } = await sb.from('reviews').select('*').eq('id', id).single();
+  if (!review) return toast('Review not found', 'error');
+  openModal('AI Draft Response', `
+    <div class="review-preview-card">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+        <span style="font-weight:600">${review.reviewer_name || 'Customer'}</span>
+        <span>${starsHTML(review.rating || 3)}</span>
+        <span class="badge badge-platform">${review.platform || ''}</span>
+      </div>
+      <p style="color:var(--text-secondary);font-size:13px">${review.review_text || review.content || ''}</p>
+    </div>
+    <div class="form-group"><label class="form-label">Tone</label>
+      <select class="form-select" id="ai-draft-tone">
+        <option value="professional">Professional</option>
+        <option value="friendly">Friendly</option>
+        <option value="apologetic">Apologetic</option>
+        <option value="enthusiastic">Enthusiastic</option>
+      </select>
+    </div>
+    <div class="form-group"><label class="form-label">Generated Draft</label>
+      <textarea class="form-textarea" id="ai-draft-text" rows="4" placeholder="Click Generate to create an AI draft...">${review.ai_draft_response || ''}</textarea>
+    </div>
+  `, `
+    <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+    <button class="btn btn-accent" id="ai-draft-generate"><i data-lucide="sparkles"></i> Generate</button>
+    <button class="btn btn-primary" id="ai-draft-save">Save & Use as Response</button>
+  `);
+  lucide.createIcons({ nameAttr: 'data-lucide' });
+
+  $('#ai-draft-generate').onclick = async () => {
+    const btn = $('#ai-draft-generate');
+    btn.disabled = true; btn.innerHTML = '<i data-lucide="loader"></i> Generating...';
+    const tone = $('#ai-draft-tone').value;
+    const rating = review.rating || 3;
+    const restaurantName = review.restaurant_name || review.restaurant || 'our restaurant';
+    const reviewText = review.review_text || review.content || '';
+    const toneMap = { professional: 'Use a professional, polished tone.', friendly: 'Use a warm, casual, friendly tone.', apologetic: 'Lead with a sincere apology.', enthusiastic: 'Be upbeat and enthusiastic.' };
+    const draft = await generateAIContent(`You are a restaurant manager responding to a ${rating}-star review for ${restaurantName}. Review: "${reviewText}". ${toneMap[tone]} ${rating >= 4 ? 'Thank the customer and encourage return.' : 'Acknowledge the issue and offer to make it right.'} Under 100 words. Sound human.`, 200);
+    btn.innerHTML = '<i data-lucide="sparkles"></i> Generate'; btn.disabled = false;
+    lucide.createIcons({ nameAttr: 'data-lucide' });
+    if (draft) { $('#ai-draft-text').value = draft; toast('Draft generated', 'success'); }
+    else toast('Failed to generate', 'error');
+  };
+
+  $('#ai-draft-save').onclick = async () => {
+    const draft = $('#ai-draft-text').value;
+    const tone = $('#ai-draft-tone').value;
+    if (!draft.trim()) return toast('Generate a draft first', 'error');
+    await sb.from('reviews').update({ ai_draft_response: draft, response_tone: tone, response_text: draft, status: 'responded', response_by: currentUser.id, response_date: new Date().toISOString().slice(0, 10) }).eq('id', id);
+    await logActivity('ai_draft_review', `AI drafted & saved response for review #${id}`);
+    closeModal();
+    toast('AI draft saved & marked as responded', 'success');
     navigate('reviews');
   };
 };
@@ -7066,6 +7173,587 @@ function renderLoy_Analytics(container, { promos, members, redemptions }) {
     </div>
   `;
 }
+
+// ============================================
+// PAGE: Gifting & Comps
+// ============================================
+async function renderGifting(container) {
+  await getEmployees();
+  const [giftsRes,InflRes, restRes] = await Promise.all([
+    sb.from('influencer_gifts').select('*').order('created_at', { ascending: false }),
+    sb.from('influencers').select('id, name, handle'),
+    sb.from('restaurants').select('id, name'),
+  ]);
+  const gifts = giftsRes.data || [];
+  const influencers =InflRes.data || [];
+  const restaurants = restRes.data || [];
+  const infMap = {}; influencers.forEach(i => infMap[i.id] = i);
+
+  let activeTab = 'active';
+
+  function render() {
+    const active = gifts.filter(g => !['posted'].includes(g.status) && (!g.sent_date || daysDiff(g.sent_date) < 90));
+    const history = gifts.filter(g => g.status === 'posted' || (g.sent_date && daysDiff(g.sent_date) >= 90));
+    const pendingFollowUps = active.filter(g => g.follow_up_date && !g.follow_up_done && new Date(g.follow_up_date) <= new Date());
+    const totalValue = gifts.reduce((s, g) => s + parseFloat(g.value || 0), 0);
+    const posted = gifts.filter(g => g.status === 'posted').length;
+    const convRate = gifts.length ? Math.round((posted / gifts.length) * 100) : 0;
+
+    // Monthly spend for budget chart
+    const monthlySpend = {};
+    gifts.forEach(g => {
+      if (!g.sent_date) return;
+      const m = g.sent_date.substring(0, 7);
+      monthlySpend[m] = (monthlySpend[m] || 0) + parseFloat(g.value || 0);
+    });
+    const sortedMonths = Object.keys(monthlySpend).sort();
+
+    container.innerHTML = `
+      <h1 class="page-title">Gifting & Comps</h1>
+      <p class="page-subtitle">Track influencer gifts, comps, and ROI</p>
+      <div class="kpi-grid">
+        <div class="kpi-card"><div class="kpi-label">Total Gifted Value</div><div class="kpi-value">$${totalValue.toLocaleString()}</div></div>
+        <div class="kpi-card"><div class="kpi-label">Pending Follow-Ups</div><div class="kpi-value" style="color:${pendingFollowUps.length ? 'var(--danger)' : 'var(--success)'}">${pendingFollowUps.length}</div></div>
+        <div class="kpi-card"><div class="kpi-label">Conversion Rate</div><div class="kpi-value">${convRate}%</div></div>
+        <div class="kpi-card"><div class="kpi-label">Active Gifts</div><div class="kpi-value" style="color:var(--accent)">${active.length}</div></div>
+      </div>
+      <div class="tab-bar">
+        <button class="tab-btn ${activeTab==='active'?'active':''}" data-tab="active">Active Gifts</button>
+        <button class="tab-btn ${activeTab==='history'?'active':''}" data-tab="history">History</button>
+        <button class="tab-btn ${activeTab==='budget'?'active':''}" data-tab="budget">Budget Overview</button>
+        <div style="margin-left:auto"><button class="btn btn-primary btn-sm" id="add-gift-btn"><i data-lucide="plus"></i> Add Gift</button></div>
+      </div>
+      <div id="gifting-tab-content"></div>
+    `;
+    lucide.createIcons({ nameAttr: 'data-lucide' });
+    $$('.tab-btn').forEach(b => b.onclick = () => { activeTab = b.dataset.tab; render(); });
+
+    const tc = $('#gifting-tab-content');
+    if (activeTab === 'active') {
+      tc.innerHTML = `<div class="table-container"><table class="data-table"><thead><tr>
+        <th>Influencer</th><th>Type</th><th>Description</th><th>Value</th><th>Sent</th><th>Status</th><th>Follow-Up</th><th>Actions</th>
+      </tr></thead><tbody>
+        ${active.map(g => {
+          const inf = infMap[g.influencer_id];
+          const overdue = g.follow_up_date && !g.follow_up_done && new Date(g.follow_up_date) <= new Date();
+          return `<tr>
+            <td>${inf ? inf.name : '#' + g.influencer_id}</td>
+            <td><span class="badge">${g.type}</span></td>
+            <td>${g.description || ''}</td>
+            <td>$${parseFloat(g.value||0).toFixed(2)}</td>
+            <td>${g.sent_date || '—'}</td>
+            <td><span class="badge badge-${g.status === 'received' ? 'success' : g.status === 'sent' ? 'info' : 'warning'}">${g.status}</span></td>
+            <td style="${overdue ? 'color:var(--danger);font-weight:600' : ''}">${g.follow_up_date || '—'} ${g.follow_up_done ? '✓' : ''}</td>
+            <td><button class="btn btn-xs btn-secondary" onclick="editGift(${g.id})"><i data-lucide="edit" style="width:14px;height:14px"></i></button>
+            <button class="btn btn-xs btn-danger" onclick="deleteGift(${g.id})"><i data-lucide="trash-2" style="width:14px;height:14px"></i></button></td>
+          </tr>`;
+        }).join('')}
+        ${!active.length ? '<tr><td colspan="8" class="text-center">No active gifts</td></tr>' : ''}
+      </tbody></table></div>`;
+    } else if (activeTab === 'history') {
+      tc.innerHTML = `<div style="margin-bottom:12px;text-align:right"><button class="btn btn-secondary btn-sm" id="export-gifts"><i data-lucide="download"></i> Export CSV</button></div>
+      <div class="table-container"><table class="data-table"><thead><tr>
+        <th>Influencer</th><th>Type</th><th>Value</th><th>Sent</th><th>Status</th><th>Notes</th>
+      </tr></thead><tbody>
+        ${history.map(g => { const inf = infMap[g.influencer_id]; return `<tr>
+          <td>${inf ? inf.name : '#' + g.influencer_id}</td><td>${g.type}</td><td>$${parseFloat(g.value||0).toFixed(2)}</td>
+          <td>${g.sent_date || '—'}</td><td><span class="badge">${g.status}</span></td><td>${g.notes || ''}</td></tr>`; }).join('')}
+        ${!history.length ? '<tr><td colspan="6" class="text-center">No history</td></tr>' : ''}
+      </tbody></table></div>`;
+      lucide.createIcons({ nameAttr: 'data-lucide' });
+      const expBtn = $('#export-gifts');
+      if (expBtn) expBtn.onclick = () => csvExport(history, 'gifting-history');
+    } else if (activeTab === 'budget') {
+      tc.innerHTML = `<div class="kpi-grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:20px">
+        <div class="kpi-card"><div class="kpi-label">This Month</div><div class="kpi-value">$${(monthlySpend[new Date().toISOString().slice(0,7)] || 0).toFixed(0)}</div></div>
+        <div class="kpi-card"><div class="kpi-label">Last Month</div><div class="kpi-value">$${(monthlySpend[new Date(Date.now()-30*86400000).toISOString().slice(0,7)] || 0).toFixed(0)}</div></div>
+        <div class="kpi-card"><div class="kpi-label">Avg Monthly</div><div class="kpi-value">$${sortedMonths.length ? (Object.values(monthlySpend).reduce((a,b)=>a+b,0)/sortedMonths.length).toFixed(0) : '0'}</div></div>
+        <div class="kpi-card"><div class="kpi-label">Year Total</div><div class="kpi-value">$${totalValue.toFixed(0)}</div></div>
+      </div>
+      <div class="kpi-card" style="padding:20px"><canvas id="gift-budget-chart" height="200"></canvas></div>`;
+      if (sortedMonths.length) {
+        new Chart($('#gift-budget-chart'), { type: 'bar', data: {
+          labels: sortedMonths, datasets: [{ label: 'Monthly Spend ($)', data: sortedMonths.map(m => monthlySpend[m]),
+          backgroundColor: 'rgba(99,102,241,0.6)', borderRadius: 4 }]
+        }, options: { responsive: true, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true } } } });
+      }
+    }
+    lucide.createIcons({ nameAttr: 'data-lucide' });
+
+    // Add Gift modal
+    $('#add-gift-btn').onclick = () => {
+      openModal('Add Gift / Comp', `
+        <div class="form-group"><label class="form-label">Influencer</label>
+          <select class="form-select" id="gift-influencer">${influencers.map(i => `<option value="${i.id}">${i.name} (@${i.handle || ''})</option>`).join('')}</select></div>
+        <div class="form-group"><label class="form-label">Restaurant</label>
+          <select class="form-select" id="gift-restaurant"><option value="">— None —</option>${restaurants.map(r => `<option value="${r.id}">${r.name}</option>`).join('')}</select></div>
+        <div class="form-row"><div class="form-group"><label class="form-label">Type</label>
+          <select class="form-select" id="gift-type"><option value="meal">Meal</option><option value="gift_card">Gift Card</option><option value="product">Product</option><option value="experience">Experience</option></select></div>
+        <div class="form-group"><label class="form-label">Value ($)</label><input class="form-input" id="gift-value" type="number" step="0.01" placeholder="0.00"></div></div>
+        <div class="form-group"><label class="form-label">Description</label><input class="form-input" id="gift-desc" placeholder="e.g. Dinner for 2"></div>
+        <div class="form-row"><div class="form-group"><label class="form-label">Sent Date</label><input class="form-input" id="gift-sent" type="date"></div>
+        <div class="form-group"><label class="form-label">Follow-Up Date</label><input class="form-input" id="gift-followup" type="date"></div></div>
+        <div class="form-group"><label class="form-label">Notes</label><textarea class="form-textarea" id="gift-notes" rows="2"></textarea></div>
+      `, `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button><button class="btn btn-primary" id="save-gift-btn">Save Gift</button>`);
+      $('#save-gift-btn').onclick = async () => {
+        const influencer_id = parseInt($('#gift-influencer').value);
+        if (!influencer_id) return toast('Select an influencer', 'error');
+        await sb.from('influencer_gifts').insert({
+          influencer_id, restaurant_id: $('#gift-restaurant').value || null,
+          type: $('#gift-type').value, value: parseFloat($('#gift-value').value) || 0,
+          description: $('#gift-desc').value.trim(), sent_date: $('#gift-sent').value || null,
+          follow_up_date: $('#gift-followup').value || null, notes: $('#gift-notes').value.trim(),
+          status: $('#gift-sent').value ? 'sent' : 'pending', created_by: currentUser.id,
+        });
+        closeModal(); toast('Gift added', 'success');
+        await logActivity('add_gift', `Added gift for influencer #${influencer_id}`);
+        navigate('gifting');
+      };
+    };
+  }
+
+  function daysDiff(dateStr) { return Math.floor((Date.now() - new Date(dateStr).getTime()) / 86400000); }
+  render();
+}
+
+window.editGift = async function(id) {
+  const { data: g } = await sb.from('influencer_gifts').select('*').eq('id', id).single();
+  if (!g) return toast('Gift not found', 'error');
+  openModal('Edit Gift', `
+    <div class="form-row"><div class="form-group"><label class="form-label">Type</label>
+      <select class="form-select" id="eg-type"><option value="meal" ${g.type==='meal'?'selected':''}>Meal</option><option value="gift_card" ${g.type==='gift_card'?'selected':''}>Gift Card</option><option value="product" ${g.type==='product'?'selected':''}>Product</option><option value="experience" ${g.type==='experience'?'selected':''}>Experience</option></select></div>
+    <div class="form-group"><label class="form-label">Value ($)</label><input class="form-input" id="eg-value" type="number" step="0.01" value="${g.value||''}"></div></div>
+    <div class="form-group"><label class="form-label">Description</label><input class="form-input" id="eg-desc" value="${g.description||''}"></div>
+    <div class="form-group"><label class="form-label">Status</label>
+      <select class="form-select" id="eg-status"><option value="pending" ${g.status==='pending'?'selected':''}>Pending</option><option value="sent" ${g.status==='sent'?'selected':''}>Sent</option><option value="received" ${g.status==='received'?'selected':''}>Received</option><option value="posted" ${g.status==='posted'?'selected':''}>Posted</option></select></div>
+    <div class="form-row"><div class="form-group"><label class="form-label">Sent Date</label><input class="form-input" id="eg-sent" type="date" value="${g.sent_date||''}"></div>
+    <div class="form-group"><label class="form-label">Follow-Up Date</label><input class="form-input" id="eg-followup" type="date" value="${g.follow_up_date||''}"></div></div>
+    <div class="form-group"><label><input type="checkbox" id="eg-fudone" ${g.follow_up_done?'checked':''}> Follow-up completed</label></div>
+    <div class="form-group"><label class="form-label">Notes</label><textarea class="form-textarea" id="eg-notes" rows="2">${g.notes||''}</textarea></div>
+  `, `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button><button class="btn btn-primary" id="save-eg-btn">Update</button>`);
+  $('#save-eg-btn').onclick = async () => {
+    await sb.from('influencer_gifts').update({
+      type: $('#eg-type').value, value: parseFloat($('#eg-value').value) || 0,
+      description: $('#eg-desc').value.trim(), status: $('#eg-status').value,
+      sent_date: $('#eg-sent').value || null, follow_up_date: $('#eg-followup').value || null,
+      follow_up_done: $('#eg-fudone').checked, notes: $('#eg-notes').value.trim(),
+      updated_at: new Date().toISOString(),
+    }).eq('id', id);
+    closeModal(); toast('Gift updated', 'success'); navigate('gifting');
+  };
+};
+
+window.deleteGift = async function(id) {
+  if (!confirm('Delete this gift record?')) return;
+  await sb.from('influencer_gifts').delete().eq('id', id);
+  toast('Gift deleted', 'success'); navigate('gifting');
+};
+
+// ============================================
+// PAGE: Events & Tastings
+// ============================================
+async function renderEvents(container) {
+  await getEmployees();
+  const [eventsRes, invitesRes, inflRes, restRes] = await Promise.all([
+    sb.from('events').select('*').order('date', { ascending: false }),
+    sb.from('event_invites').select('*'),
+    sb.from('influencers').select('id, name, handle, email'),
+    sb.from('restaurants').select('id, name'),
+  ]);
+  const events = eventsRes.data || [];
+  const invites = invitesRes.data || [];
+  const influencers = inflRes.data || [];
+  const restaurants = restRes.data || [];
+  const infMap = {}; influencers.forEach(i => infMap[i.id] = i);
+
+  let activeTab = 'upcoming';
+
+  function getInvites(eventId) { return invites.filter(inv => inv.event_id === eventId); }
+
+  function render() {
+    const today = new Date().toISOString().slice(0, 10);
+    const upcoming = events.filter(e => e.date >= today && e.status !== 'cancelled');
+    const past = events.filter(e => e.date < today || e.status === 'completed' || e.status === 'cancelled');
+    const totalInvites = invites.length;
+    const confirmedInvites = invites.filter(i => i.status === 'confirmed' || i.status === 'attended').length;
+    const confirmRate = totalInvites ? Math.round((confirmedInvites / totalInvites) * 100) : 0;
+    const thisMonth = upcoming.filter(e => e.date.substring(0,7) === today.substring(0,7)).length;
+
+    container.innerHTML = `
+      <h1 class="page-title">Events & Tastings</h1>
+      <p class="page-subtitle">Manage events, tastings, and influencer invitations</p>
+      <div class="kpi-grid">
+        <div class="kpi-card"><div class="kpi-label">Upcoming Events</div><div class="kpi-value" style="color:var(--accent)">${upcoming.length}</div></div>
+        <div class="kpi-card"><div class="kpi-label">Total Invites</div><div class="kpi-value">${totalInvites}</div></div>
+        <div class="kpi-card"><div class="kpi-label">Confirmed Rate</div><div class="kpi-value" style="color:var(--success)">${confirmRate}%</div></div>
+        <div class="kpi-card"><div class="kpi-label">Events This Month</div><div class="kpi-value">${thisMonth}</div></div>
+      </div>
+      <div class="tab-bar">
+        <button class="tab-btn ${activeTab==='upcoming'?'active':''}" data-tab="upcoming">Upcoming</button>
+        <button class="tab-btn ${activeTab==='past'?'active':''}" data-tab="past">Past Events</button>
+        <button class="tab-btn ${activeTab==='invites'?'active':''}" data-tab="invites">All Invites</button>
+        <div style="margin-left:auto"><button class="btn btn-primary btn-sm" id="add-event-btn"><i data-lucide="plus"></i> Add Event</button></div>
+      </div>
+      <div id="events-tab-content"></div>
+    `;
+    lucide.createIcons({ nameAttr: 'data-lucide' });
+    $$('.tab-btn').forEach(b => b.onclick = () => { activeTab = b.dataset.tab; render(); });
+
+    const tc = $('#events-tab-content');
+    if (activeTab === 'upcoming') {
+      tc.innerHTML = upcoming.length ? `<div class="review-grid">${upcoming.map(ev => {
+        const evInv = getInvites(ev.id);
+        const confirmed = evInv.filter(i => i.status === 'confirmed' || i.status === 'attended').length;
+        return `<div class="review-card">
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <h4 style="margin:0">${ev.name}</h4>
+            <span class="badge badge-${ev.type === 'tasting' ? 'info' : ev.type === 'launch' ? 'success' : 'warning'}">${ev.type}</span>
+          </div>
+          <div style="display:flex;gap:16px;margin:10px 0;font-size:13px;color:var(--text-secondary)">
+            <span><i data-lucide="calendar" style="width:14px;height:14px"></i> ${ev.date}${ev.time ? ' at ' + ev.time : ''}</span>
+            ${ev.location ? `<span><i data-lucide="map-pin" style="width:14px;height:14px"></i> ${ev.location}</span>` : ''}
+          </div>
+          ${ev.description ? `<p style="font-size:13px;color:var(--text-secondary);margin:6px 0">${ev.description}</p>` : ''}
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-top:10px">
+            <span style="font-size:13px"><strong>${confirmed}</strong>/${evInv.length} confirmed ${ev.capacity ? `(cap: ${ev.capacity})` : ''}</span>
+            <div style="display:flex;gap:6px">
+              <button class="btn btn-xs btn-secondary" onclick="manageEventInvites(${ev.id})"><i data-lucide="users" style="width:14px;height:14px"></i> Invites</button>
+              <button class="btn btn-xs btn-secondary" onclick="editEvent(${ev.id})"><i data-lucide="edit" style="width:14px;height:14px"></i></button>
+              <button class="btn btn-xs btn-danger" onclick="deleteEvent(${ev.id})"><i data-lucide="trash-2" style="width:14px;height:14px"></i></button>
+            </div>
+          </div>
+        </div>`;
+      }).join('')}</div>` : '<div class="empty-state"><p>No upcoming events</p></div>';
+    } else if (activeTab === 'past') {
+      tc.innerHTML = `<div class="table-container"><table class="data-table"><thead><tr>
+        <th>Event</th><th>Type</th><th>Date</th><th>Location</th><th>Invited</th><th>Confirmed</th><th>Attended</th><th>Rate</th>
+      </tr></thead><tbody>
+        ${past.map(ev => {
+          const evInv = getInvites(ev.id);
+          const confirmed = evInv.filter(i => i.status === 'confirmed' || i.status === 'attended').length;
+          const attended = evInv.filter(i => i.status === 'attended').length;
+          const rate = evInv.length ? Math.round((attended / evInv.length) * 100) : 0;
+          return `<tr><td>${ev.name}</td><td><span class="badge">${ev.type}</span></td><td>${ev.date}</td><td>${ev.location||'—'}</td>
+            <td>${evInv.length}</td><td>${confirmed}</td><td>${attended}</td><td>${rate}%</td></tr>`;
+        }).join('')}
+        ${!past.length ? '<tr><td colspan="8" class="text-center">No past events</td></tr>' : ''}
+      </tbody></table></div>`;
+    } else if (activeTab === 'invites') {
+      tc.innerHTML = `<div class="table-container"><table class="data-table"><thead><tr>
+        <th>Event</th><th>Influencer</th><th>Status</th><th>RSVP Date</th><th>Actions</th>
+      </tr></thead><tbody>
+        ${invites.map(inv => {
+          const ev = events.find(e => e.id === inv.event_id);
+          const inf = infMap[inv.influencer_id];
+          return `<tr><td>${ev ? ev.name : '#' + inv.event_id}</td><td>${inf ? inf.name : '#' + inv.influencer_id}</td>
+            <td><select class="form-select form-select-sm" onchange="updateInviteStatus(${inv.id}, this.value)" style="width:120px">
+              ${['invited','confirmed','declined','attended','no_show'].map(s => `<option value="${s}" ${inv.status===s?'selected':''}>${s.replace('_',' ')}</option>`).join('')}
+            </select></td>
+            <td>${inv.rsvp_date ? new Date(inv.rsvp_date).toLocaleDateString() : '—'}</td>
+            <td><button class="btn btn-xs btn-danger" onclick="deleteInvite(${inv.id})"><i data-lucide="trash-2" style="width:14px;height:14px"></i></button></td></tr>`;
+        }).join('')}
+        ${!invites.length ? '<tr><td colspan="5" class="text-center">No invites yet</td></tr>' : ''}
+      </tbody></table></div>`;
+    }
+    lucide.createIcons({ nameAttr: 'data-lucide' });
+
+    // Add Event modal
+    $('#add-event-btn').onclick = () => {
+      openModal('Add Event', `
+        <div class="form-group"><label class="form-label">Event Name</label><input class="form-input" id="ev-name" placeholder="e.g. Spring Tasting Night"></div>
+        <div class="form-row"><div class="form-group"><label class="form-label">Type</label>
+          <select class="form-select" id="ev-type"><option value="tasting">Tasting</option><option value="launch">Launch</option><option value="event">Event</option><option value="meetup">Meetup</option></select></div>
+        <div class="form-group"><label class="form-label">Date</label><input class="form-input" id="ev-date" type="date"></div></div>
+        <div class="form-row"><div class="form-group"><label class="form-label">Time</label><input class="form-input" id="ev-time" type="time"></div>
+        <div class="form-group"><label class="form-label">Capacity</label><input class="form-input" id="ev-capacity" type="number" placeholder="0"></div></div>
+        <div class="form-group"><label class="form-label">Restaurant</label>
+          <select class="form-select" id="ev-restaurant"><option value="">— None —</option>${restaurants.map(r => `<option value="${r.id}">${r.name}</option>`).join('')}</select></div>
+        <div class="form-group"><label class="form-label">Location</label><input class="form-input" id="ev-location" placeholder="Address or venue name"></div>
+        <div class="form-group"><label class="form-label">Description</label><textarea class="form-textarea" id="ev-desc" rows="2"></textarea></div>
+      `, `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button><button class="btn btn-primary" id="save-event-btn">Create Event</button>`);
+      $('#save-event-btn').onclick = async () => {
+        const name = $('#ev-name').value.trim();
+        const date = $('#ev-date').value;
+        if (!name || !date) return toast('Name and date are required', 'error');
+        await sb.from('events').insert({
+          name, type: $('#ev-type').value, date, time: $('#ev-time').value || null,
+          restaurant_id: $('#ev-restaurant').value || null, location: $('#ev-location').value.trim(),
+          description: $('#ev-desc').value.trim(), capacity: parseInt($('#ev-capacity').value) || 0,
+          status: 'published', created_by: currentUser.id,
+        });
+        closeModal(); toast('Event created', 'success');
+        await logActivity('create_event', `Created event: ${name}`);
+        navigate('events');
+      };
+    };
+  }
+  render();
+}
+
+window.editEvent = async function(id) {
+  const { data: ev } = await sb.from('events').select('*').eq('id', id).single();
+  if (!ev) return toast('Event not found', 'error');
+  openModal('Edit Event', `
+    <div class="form-group"><label class="form-label">Name</label><input class="form-input" id="ee-name" value="${ev.name}"></div>
+    <div class="form-row"><div class="form-group"><label class="form-label">Type</label>
+      <select class="form-select" id="ee-type">${['tasting','launch','event','meetup'].map(t => `<option value="${t}" ${ev.type===t?'selected':''}>${t}</option>`).join('')}</select></div>
+    <div class="form-group"><label class="form-label">Status</label>
+      <select class="form-select" id="ee-status">${['draft','published','cancelled','completed'].map(s => `<option value="${s}" ${ev.status===s?'selected':''}>${s}</option>`).join('')}</select></div></div>
+    <div class="form-row"><div class="form-group"><label class="form-label">Date</label><input class="form-input" id="ee-date" type="date" value="${ev.date||''}"></div>
+    <div class="form-group"><label class="form-label">Time</label><input class="form-input" id="ee-time" type="time" value="${ev.time||''}"></div></div>
+    <div class="form-group"><label class="form-label">Location</label><input class="form-input" id="ee-location" value="${ev.location||''}"></div>
+    <div class="form-group"><label class="form-label">Capacity</label><input class="form-input" id="ee-capacity" type="number" value="${ev.capacity||0}"></div>
+    <div class="form-group"><label class="form-label">Description</label><textarea class="form-textarea" id="ee-desc" rows="2">${ev.description||''}</textarea></div>
+  `, `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button><button class="btn btn-primary" id="save-ee-btn">Update</button>`);
+  $('#save-ee-btn').onclick = async () => {
+    await sb.from('events').update({
+      name: $('#ee-name').value.trim(), type: $('#ee-type').value, status: $('#ee-status').value,
+      date: $('#ee-date').value, time: $('#ee-time').value || null, location: $('#ee-location').value.trim(),
+      capacity: parseInt($('#ee-capacity').value) || 0, description: $('#ee-desc').value.trim(),
+      updated_at: new Date().toISOString(),
+    }).eq('id', id);
+    closeModal(); toast('Event updated', 'success'); navigate('events');
+  };
+};
+
+window.deleteEvent = async function(id) {
+  if (!confirm('Delete this event and all its invites?')) return;
+  await sb.from('event_invites').delete().eq('event_id', id);
+  await sb.from('events').delete().eq('id', id);
+  toast('Event deleted', 'success'); navigate('events');
+};
+
+window.manageEventInvites = async function(eventId) {
+  const { data: ev } = await sb.from('events').select('*').eq('id', eventId).single();
+  const { data: existingInvites } = await sb.from('event_invites').select('*').eq('event_id', eventId);
+  const { data: allInf } = await sb.from('influencers').select('id, name, handle');
+  const existing = new Set((existingInvites || []).map(i => i.influencer_id));
+
+  openModal(`Invite Influencers — ${ev?.name || ''}`, `
+    <div style="max-height:400px;overflow-y:auto">
+      ${(allInf || []).map(inf => `<label style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--border)">
+        <input type="checkbox" class="inv-check" value="${inf.id}" ${existing.has(inf.id) ? 'checked disabled' : ''}>
+        <span>${inf.name}</span><span style="color:var(--text-muted);font-size:12px">@${inf.handle || ''}</span>
+        ${existing.has(inf.id) ? '<span class="badge badge-info" style="margin-left:auto">Already invited</span>' : ''}
+      </label>`).join('')}
+    </div>
+  `, `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button><button class="btn btn-primary" id="send-invites-btn">Send Invites</button>`);
+
+  $('#send-invites-btn').onclick = async () => {
+    const newIds = [...document.querySelectorAll('.inv-check:checked:not(:disabled)')].map(cb => parseInt(cb.value));
+    if (!newIds.length) return toast('Select influencers to invite', 'error');
+    const rows = newIds.map(influencer_id => ({ event_id: eventId, influencer_id, status: 'invited' }));
+    await sb.from('event_invites').insert(rows);
+    closeModal(); toast(`Invited ${newIds.length} influencer(s)`, 'success');
+    await logActivity('invite_event', `Invited ${newIds.length} to ${ev?.name}`);
+    navigate('events');
+  };
+};
+
+window.updateInviteStatus = async function(id, status) {
+  await sb.from('event_invites').update({ status, rsvp_date: new Date().toISOString() }).eq('id', id);
+  toast('Status updated', 'success');
+};
+
+window.deleteInvite = async function(id) {
+  if (!confirm('Remove this invite?')) return;
+  await sb.from('event_invites').delete().eq('id', id);
+  toast('Invite removed', 'success'); navigate('events');
+};
+
+// ============================================
+// PAGE: Hashtag Tracker
+// ============================================
+async function renderHashtags(container) {
+  const [hashRes, ugcRes, restRes] = await Promise.all([
+    sb.from('hashtags').select('*').order('created_at', { ascending: false }),
+    sb.from('ugc_posts').select('*').order('spotted_date', { ascending: false }),
+    sb.from('restaurants').select('id, name'),
+  ]);
+  const hashtags = hashRes.data || [];
+  const ugcPosts = ugcRes.data || [];
+  const restaurants = restRes.data || [];
+  const hashMap = {}; hashtags.forEach(h => hashMap[h.id] = h);
+
+  let activeTab = 'branded';
+
+  function render() {
+    const branded = hashtags.filter(h => h.is_branded);
+    const trending = hashtags.filter(h => !h.is_branded);
+    const totalPosts = branded.reduce((s, h) => s + (h.total_posts || 0), 0);
+    const totalReach = branded.reduce((s, h) => s + parseInt(h.total_reach || 0), 0);
+    const topHash = branded.sort((a, b) => (b.total_posts || 0) - (a.total_posts || 0))[0];
+    const thisMonthUGC = ugcPosts.filter(p => p.spotted_date && p.spotted_date.substring(0,7) === new Date().toISOString().slice(0,7)).length;
+    const avgReach = ugcPosts.length ? Math.round(ugcPosts.reduce((s, p) => s + parseInt(p.reach || 0), 0) / ugcPosts.length) : 0;
+
+    container.innerHTML = `
+      <h1 class="page-title">Hashtag Tracker</h1>
+      <p class="page-subtitle">Track branded hashtags, trends, and user-generated content</p>
+      <div class="kpi-grid">
+        <div class="kpi-card"><div class="kpi-label">Branded Hashtags</div><div class="kpi-value" style="color:var(--accent)">${branded.length}</div></div>
+        <div class="kpi-card"><div class="kpi-label">Total Posts</div><div class="kpi-value">${totalPosts.toLocaleString()}</div></div>
+        <div class="kpi-card"><div class="kpi-label">Top Hashtag</div><div class="kpi-value" style="font-size:18px">${topHash ? '#' + topHash.hashtag : '—'}</div></div>
+        <div class="kpi-card"><div class="kpi-label">Total Reach</div><div class="kpi-value">${totalReach.toLocaleString()}</div></div>
+      </div>
+      <div class="tab-bar">
+        <button class="tab-btn ${activeTab==='branded'?'active':''}" data-tab="branded">Branded</button>
+        <button class="tab-btn ${activeTab==='trending'?'active':''}" data-tab="trending">Trending</button>
+        <button class="tab-btn ${activeTab==='ugc'?'active':''}" data-tab="ugc">UGC Feed</button>
+        <div style="margin-left:auto"><button class="btn btn-primary btn-sm" id="add-hashtag-btn"><i data-lucide="plus"></i> Add Hashtag</button></div>
+      </div>
+      <div id="hashtag-tab-content"></div>
+    `;
+    lucide.createIcons({ nameAttr: 'data-lucide' });
+    $$('.tab-btn').forEach(b => b.onclick = () => { activeTab = b.dataset.tab; render(); });
+
+    const tc = $('#hashtag-tab-content');
+    if (activeTab === 'branded') {
+      tc.innerHTML = `<div class="table-container"><table class="data-table"><thead><tr>
+        <th>Hashtag</th><th>Platform</th><th>Total Posts</th><th>Total Reach</th><th>Last Seen</th><th>Notes</th><th>Actions</th>
+      </tr></thead><tbody>
+        ${branded.map(h => `<tr>
+          <td style="font-weight:600;color:var(--accent)">#${h.hashtag}</td>
+          <td>${h.platform}</td><td>${(h.total_posts||0).toLocaleString()}</td><td>${parseInt(h.total_reach||0).toLocaleString()}</td>
+          <td>${h.last_seen || '—'}</td><td>${h.notes || ''}</td>
+          <td><button class="btn btn-xs btn-secondary" onclick="editHashtag(${h.id})"><i data-lucide="edit" style="width:14px;height:14px"></i></button>
+          <button class="btn btn-xs btn-danger" onclick="deleteHashtag(${h.id})"><i data-lucide="trash-2" style="width:14px;height:14px"></i></button></td>
+        </tr>`).join('')}
+        ${!branded.length ? '<tr><td colspan="7" class="text-center">No branded hashtags yet</td></tr>' : ''}
+      </tbody></table></div>`;
+    } else if (activeTab === 'trending') {
+      tc.innerHTML = `<div class="table-container"><table class="data-table"><thead><tr>
+        <th>Hashtag</th><th>Platform</th><th>Posts</th><th>Reach</th><th>Last Seen</th><th>Notes</th><th>Actions</th>
+      </tr></thead><tbody>
+        ${trending.map(h => `<tr>
+          <td>#${h.hashtag}</td><td>${h.platform}</td><td>${(h.total_posts||0).toLocaleString()}</td>
+          <td>${parseInt(h.total_reach||0).toLocaleString()}</td><td>${h.last_seen || '—'}</td><td>${h.notes || ''}</td>
+          <td><button class="btn btn-xs btn-secondary" onclick="editHashtag(${h.id})"><i data-lucide="edit" style="width:14px;height:14px"></i></button>
+          <button class="btn btn-xs btn-danger" onclick="deleteHashtag(${h.id})"><i data-lucide="trash-2" style="width:14px;height:14px"></i></button></td>
+        </tr>`).join('')}
+        ${!trending.length ? '<tr><td colspan="7" class="text-center">No trending hashtags tracked yet</td></tr>' : ''}
+      </tbody></table></div>`;
+    } else if (activeTab === 'ugc') {
+      tc.innerHTML = `
+        <div class="kpi-grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:16px">
+          <div class="kpi-card"><div class="kpi-label">Total UGC</div><div class="kpi-value">${ugcPosts.length}</div></div>
+          <div class="kpi-card"><div class="kpi-label">This Month</div><div class="kpi-value" style="color:var(--accent)">${thisMonthUGC}</div></div>
+          <div class="kpi-card"><div class="kpi-label">Avg Reach</div><div class="kpi-value">${avgReach.toLocaleString()}</div></div>
+          <div class="kpi-card"><div class="kpi-label">Platforms</div><div class="kpi-value">${[...new Set(ugcPosts.map(p=>p.platform).filter(Boolean))].length}</div></div>
+        </div>
+        <div style="margin-bottom:12px;text-align:right"><button class="btn btn-primary btn-sm" id="log-ugc-btn"><i data-lucide="plus"></i> Log UGC</button></div>
+        <div class="review-grid">
+          ${ugcPosts.map(p => {
+            const ht = hashMap[p.hashtag_id];
+            return `<div class="review-card">
+              <div style="display:flex;justify-content:space-between;align-items:center">
+                <span style="font-weight:600">@${p.author_handle || 'unknown'}</span>
+                <span class="badge">${p.platform || ''}</span>
+              </div>
+              ${ht ? `<div style="font-size:12px;color:var(--accent);margin:4px 0">#${ht.hashtag}</div>` : ''}
+              <p style="font-size:13px;color:var(--text-secondary);margin:6px 0">${p.caption ? p.caption.substring(0, 120) + (p.caption.length > 120 ? '...' : '') : ''}</p>
+              <div style="display:flex;justify-content:space-between;align-items:center;font-size:12px;color:var(--text-muted)">
+                <span>Reach: ${parseInt(p.reach||0).toLocaleString()} | Eng: ${parseInt(p.engagement||0).toLocaleString()}</span>
+                ${p.post_url ? `<a href="${p.post_url}" target="_blank" class="btn btn-xs btn-secondary">View Post</a>` : ''}
+              </div>
+              <div style="margin-top:6px;font-size:11px;color:var(--text-muted)">${p.spotted_date || ''}</div>
+            </div>`;
+          }).join('')}
+          ${!ugcPosts.length ? '<div class="empty-state"><p>No UGC posts logged yet</p></div>' : ''}
+        </div>
+      `;
+      lucide.createIcons({ nameAttr: 'data-lucide' });
+      const logBtn = $('#log-ugc-btn');
+      if (logBtn) logBtn.onclick = () => {
+        openModal('Log UGC Post', `
+          <div class="form-group"><label class="form-label">Hashtag</label>
+            <select class="form-select" id="ugc-hashtag"><option value="">— None —</option>${hashtags.map(h => `<option value="${h.id}">#${h.hashtag}</option>`).join('')}</select></div>
+          <div class="form-row"><div class="form-group"><label class="form-label">Platform</label>
+            <select class="form-select" id="ugc-platform"><option>instagram</option><option>tiktok</option><option>twitter</option><option>facebook</option><option>youtube</option></select></div>
+          <div class="form-group"><label class="form-label">Author Handle</label><input class="form-input" id="ugc-author" placeholder="@username"></div></div>
+          <div class="form-group"><label class="form-label">Post URL</label><input class="form-input" id="ugc-url" placeholder="https://..."></div>
+          <div class="form-group"><label class="form-label">Caption</label><textarea class="form-textarea" id="ugc-caption" rows="2"></textarea></div>
+          <div class="form-row"><div class="form-group"><label class="form-label">Reach</label><input class="form-input" id="ugc-reach" type="number" placeholder="0"></div>
+          <div class="form-group"><label class="form-label">Engagement</label><input class="form-input" id="ugc-engagement" type="number" placeholder="0"></div></div>
+          <div class="form-group"><label class="form-label">Restaurant</label>
+            <select class="form-select" id="ugc-restaurant"><option value="">— None —</option>${restaurants.map(r => `<option value="${r.id}">${r.name}</option>`).join('')}</select></div>
+        `, `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button><button class="btn btn-primary" id="save-ugc-btn">Save</button>`);
+        $('#save-ugc-btn').onclick = async () => {
+          await sb.from('ugc_posts').insert({
+            hashtag_id: parseInt($('#ugc-hashtag').value) || null,
+            platform: $('#ugc-platform').value, author_handle: $('#ugc-author').value.replace('@','').trim(),
+            post_url: $('#ugc-url').value.trim(), caption: $('#ugc-caption').value.trim(),
+            reach: parseInt($('#ugc-reach').value) || 0, engagement: parseInt($('#ugc-engagement').value) || 0,
+            restaurant_id: $('#ugc-restaurant').value || null,
+          });
+          closeModal(); toast('UGC post logged', 'success');
+          await logActivity('log_ugc', 'Logged a UGC post');
+          navigate('hashtags');
+        };
+      };
+    }
+    lucide.createIcons({ nameAttr: 'data-lucide' });
+
+    // Add Hashtag modal
+    $('#add-hashtag-btn').onclick = () => {
+      openModal('Add Hashtag', `
+        <div class="form-group"><label class="form-label">Hashtag (without #)</label><input class="form-input" id="ht-tag" placeholder="e.g. EatLocal"></div>
+        <div class="form-row"><div class="form-group"><label class="form-label">Platform</label>
+          <select class="form-select" id="ht-platform"><option>instagram</option><option>tiktok</option><option>twitter</option><option>facebook</option><option>youtube</option></select></div>
+        <div class="form-group"><label class="form-label">Type</label>
+          <select class="form-select" id="ht-branded"><option value="true">Branded</option><option value="false">Trending / General</option></select></div></div>
+        <div class="form-row"><div class="form-group"><label class="form-label">Total Posts</label><input class="form-input" id="ht-posts" type="number" placeholder="0"></div>
+        <div class="form-group"><label class="form-label">Total Reach</label><input class="form-input" id="ht-reach" type="number" placeholder="0"></div></div>
+        <div class="form-group"><label class="form-label">Restaurant</label>
+          <select class="form-select" id="ht-restaurant"><option value="">— None —</option>${restaurants.map(r => `<option value="${r.id}">${r.name}</option>`).join('')}</select></div>
+        <div class="form-group"><label class="form-label">Notes</label><textarea class="form-textarea" id="ht-notes" rows="2"></textarea></div>
+      `, `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button><button class="btn btn-primary" id="save-ht-btn">Save</button>`);
+      $('#save-ht-btn').onclick = async () => {
+        const hashtag = $('#ht-tag').value.trim().replace('#', '');
+        if (!hashtag) return toast('Enter a hashtag', 'error');
+        await sb.from('hashtags').insert({
+          hashtag, platform: $('#ht-platform').value, is_branded: $('#ht-branded').value === 'true',
+          total_posts: parseInt($('#ht-posts').value) || 0, total_reach: parseInt($('#ht-reach').value) || 0,
+          restaurant_id: $('#ht-restaurant').value || null, notes: $('#ht-notes').value.trim(),
+          last_seen: new Date().toISOString().slice(0, 10), created_by: currentUser.id,
+        });
+        closeModal(); toast('Hashtag added', 'success');
+        await logActivity('add_hashtag', `Added hashtag: #${hashtag}`);
+        navigate('hashtags');
+      };
+    };
+  }
+  render();
+}
+
+window.editHashtag = async function(id) {
+  const { data: h } = await sb.from('hashtags').select('*').eq('id', id).single();
+  if (!h) return toast('Hashtag not found', 'error');
+  openModal('Edit Hashtag', `
+    <div class="form-group"><label class="form-label">Hashtag</label><input class="form-input" id="eh-tag" value="${h.hashtag}"></div>
+    <div class="form-row"><div class="form-group"><label class="form-label">Platform</label>
+      <select class="form-select" id="eh-platform">${['instagram','tiktok','twitter','facebook','youtube'].map(p => `<option value="${p}" ${h.platform===p?'selected':''}>${p}</option>`).join('')}</select></div>
+    <div class="form-group"><label class="form-label">Branded</label>
+      <select class="form-select" id="eh-branded"><option value="true" ${h.is_branded?'selected':''}>Yes</option><option value="false" ${!h.is_branded?'selected':''}>No</option></select></div></div>
+    <div class="form-row"><div class="form-group"><label class="form-label">Total Posts</label><input class="form-input" id="eh-posts" type="number" value="${h.total_posts||0}"></div>
+    <div class="form-group"><label class="form-label">Total Reach</label><input class="form-input" id="eh-reach" type="number" value="${h.total_reach||0}"></div></div>
+    <div class="form-group"><label class="form-label">Notes</label><textarea class="form-textarea" id="eh-notes" rows="2">${h.notes||''}</textarea></div>
+  `, `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button><button class="btn btn-primary" id="save-eh-btn">Update</button>`);
+  $('#save-eh-btn').onclick = async () => {
+    await sb.from('hashtags').update({
+      hashtag: $('#eh-tag').value.trim().replace('#',''), platform: $('#eh-platform').value,
+      is_branded: $('#eh-branded').value === 'true', total_posts: parseInt($('#eh-posts').value) || 0,
+      total_reach: parseInt($('#eh-reach').value) || 0, notes: $('#eh-notes').value.trim(),
+      updated_at: new Date().toISOString(),
+    }).eq('id', id);
+    closeModal(); toast('Hashtag updated', 'success'); navigate('hashtags');
+  };
+};
+
+window.deleteHashtag = async function(id) {
+  if (!confirm('Delete this hashtag?')) return;
+  await sb.from('hashtags').delete().eq('id', id);
+  toast('Hashtag deleted', 'success'); navigate('hashtags');
+};
 
 // ============================================
 // Init
