@@ -1259,10 +1259,70 @@ async function renderCalendar(container) {
 }
 
 // ============================================
-// PAGE: Influencers
+// PAGE: Influencers (Full CRM)
 // ============================================
+
+// Helpers
+function infTier(followers) {
+  if (!followers) return 'Unknown';
+  if (followers >= 1000000) return 'Mega';
+  if (followers >= 500000) return 'Macro';
+  if (followers >= 50000) return 'Mid-Tier';
+  if (followers >= 10000) return 'Micro';
+  return 'Nano';
+}
+function tierColor(tier) {
+  return { 'Mega': '#8b5cf6', 'Macro': '#3b82f6', 'Mid-Tier': '#22c55e', 'Micro': '#f59e0b', 'Nano': '#94a3b8', 'Unknown': '#666' }[tier] || '#666';
+}
+function ambassadorBadge(tier) {
+  if (!tier) return '';
+  const colors = { Bronze: '#cd7f32', Silver: '#c0c0c0', Gold: '#ffd700', Platinum: '#e5e4e2' };
+  return `<span class="badge" style="background:${colors[tier] || '#666'}20;color:${colors[tier] || '#666'};border:1px solid ${colors[tier] || '#666'}40">${tier}</span>`;
+}
+function cpv(totalPaid, totalViews) {
+  if (!totalViews || !totalPaid) return '—';
+  return '$' + (totalPaid / totalViews * 1000).toFixed(2);
+}
+
+let infActiveTab = 'pipeline';
+
 async function renderInfluencers(container) {
   await getEmployees();
+  const tabs = [
+    { id: 'pipeline', icon: 'git-branch', label: 'Pipeline' },
+    { id: 'posts', icon: 'play-circle', label: 'Posts & Performance' },
+    { id: 'payments', icon: 'credit-card', label: 'Payments' },
+    { id: 'interactions', icon: 'message-circle', label: 'Interactions' },
+    { id: 'ambassador', icon: 'crown', label: 'Ambassador Program' },
+  ];
+
+  container.innerHTML = `
+    <h1 class="page-title">Influencers</h1>
+    <p class="page-subtitle">Manage influencer pipeline, performance tracking, and relationships</p>
+    <div class="sub-tabs" style="display:flex;gap:4px;margin-bottom:24px;border-bottom:1px solid var(--border);padding-bottom:0">
+      ${tabs.map(t => `<button class="btn btn-ghost sub-tab ${infActiveTab === t.id ? 'active' : ''}" data-tab="${t.id}" style="border-bottom:2px solid ${infActiveTab === t.id ? 'var(--accent)' : 'transparent'};border-radius:0;padding:8px 16px;font-size:13px;display:flex;align-items:center;gap:6px">
+        <i data-lucide="${t.icon}" style="width:14px;height:14px"></i>${t.label}
+      </button>`).join('')}
+    </div>
+    <div id="inf-tab-content"></div>
+  `;
+  lucide.createIcons({ nameAttr: 'data-lucide' });
+
+  $$('.sub-tab', container).forEach(btn => btn.onclick = () => {
+    infActiveTab = btn.dataset.tab;
+    renderInfluencers(container);
+  });
+
+  const tc = $('#inf-tab-content');
+  if (infActiveTab === 'pipeline') await renderInfPipeline(tc);
+  else if (infActiveTab === 'posts') await renderInfPosts(tc);
+  else if (infActiveTab === 'payments') await renderInfPayments(tc);
+  else if (infActiveTab === 'interactions') await renderInfInteractions(tc);
+  else if (infActiveTab === 'ambassador') await renderInfAmbassador(tc);
+}
+
+// ---- TAB: Pipeline ----
+async function renderInfPipeline(container) {
   const { data: influencers } = await sb.from('influencers').select('*').order('followers', { ascending: false });
   const items = influencers || [];
   const stages = ['lead', 'prospect', 'outreach', 'negotiation', 'contracted', 'completed'];
@@ -1273,24 +1333,25 @@ async function renderInfluencers(container) {
   function stageCounts() {
     return stages.map(s => ({ stage: s, count: items.filter(i => i.pipeline_stage === s).length }));
   }
-
   function filtered() {
     return activeFilter ? items.filter(i => i.pipeline_stage === activeFilter) : items;
   }
-
   function rowHTML(i) {
+    const tier = infTier(i.followers);
     return `<tr data-id="${i.id}">
       <td><input type="checkbox" class="inf-check" value="${i.id}"></td>
-      <td>${i.name}</td>
-      <td>${i.handle ? `<a href="${socialProfileUrl(i.platform, i.handle)}" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:none">${i.handle}</a>` : '—'}</td>
+      <td><strong>${i.name}</strong><div style="font-size:11px;color:var(--text-muted)">${i.handle ? '@' + i.handle.replace(/^@/,'') : ''}</div></td>
       <td>${i.platform || '—'}</td>
-      <td>${i.followers?.toLocaleString() || '—'}</td>
+      <td><span style="color:${tierColor(tier)};font-weight:600">${tier}</span><div style="font-size:11px;color:var(--text-muted)">${i.followers?.toLocaleString() || '0'}</div></td>
+      <td>${i.engagement_rate ? i.engagement_rate + '%' : '—'}</td>
       <td>${i.location || '—'}</td>
-      <td>${badgeHTML(i.category || '—')}</td>
-      <td>${i.email ? `<a href="mailto:${i.email}" style="color:var(--accent);text-decoration:none">${i.email}</a>` : '—'}</td>
+      <td>${parseJSON(i.tags).map(t => `<span class="badge badge-accent" style="font-size:10px;margin:1px">${t}</span>`).join('') || badgeHTML(i.category || '—')}</td>
+      <td>${i.email ? `<a href="mailto:${i.email}" style="color:var(--accent);text-decoration:none;font-size:12px">${i.email}</a>` : '—'}</td>
+      <td>${i.rate ? '$' + Number(i.rate).toLocaleString() : '—'}</td>
       <td>${badgeHTML(i.pipeline_stage)}</td>
       <td>${formatDate(i.last_contacted)}</td>
       <td class="table-actions">
+        <button class="btn-icon btn-ghost" onclick="viewInfluencerProfile('${i.id}')" title="View Profile"><i data-lucide="user"></i></button>
         <button class="btn-icon btn-ghost" onclick="editInfluencer('${i.id}')"><i data-lucide="edit-2"></i></button>
         <button class="btn-icon btn-ghost" onclick="deleteInfluencer('${i.id}')"><i data-lucide="trash-2"></i></button>
       </td>
@@ -1300,8 +1361,13 @@ async function renderInfluencers(container) {
   function render() {
     const f = filtered();
     container.innerHTML = `
-      <h1 class="page-title">Influencers <span style="font-size:16px;font-weight:400;color:var(--text-muted)">(${items.length} total)</span></h1>
-      <p class="page-subtitle">Manage influencer pipeline and relationships</p>
+      <div class="kpi-grid" style="grid-template-columns:repeat(5,1fr);margin-bottom:16px">
+        <div class="kpi-card"><div class="kpi-label">Total Influencers</div><div class="kpi-value">${items.length}</div></div>
+        <div class="kpi-card"><div class="kpi-label">Contracted</div><div class="kpi-value" style="color:var(--success)">${items.filter(i => i.pipeline_stage === 'contracted').length}</div></div>
+        <div class="kpi-card"><div class="kpi-label">In Negotiation</div><div class="kpi-value" style="color:var(--warning)">${items.filter(i => i.pipeline_stage === 'negotiation').length}</div></div>
+        <div class="kpi-card"><div class="kpi-label">Avg Engagement</div><div class="kpi-value">${items.length ? (items.reduce((s,i) => s + (parseFloat(i.engagement_rate) || 0), 0) / items.filter(i => i.engagement_rate).length || 0).toFixed(1) + '%' : '—'}</div></div>
+        <div class="kpi-card"><div class="kpi-label">Total Reach</div><div class="kpi-value">${items.reduce((s,i) => s + (i.followers || 0), 0).toLocaleString()}</div></div>
+      </div>
       <div class="pipeline-grid">
         ${stageCounts().map(s => `
           <div class="pipeline-card ${activeFilter === s.stage ? 'active' : ''}" style="border-top-color:${stageColors[s.stage]}" data-stage="${s.stage}">
@@ -1311,7 +1377,7 @@ async function renderInfluencers(container) {
         `).join('')}
       </div>
       <div class="table-toolbar">
-        <div class="search-filter"><i data-lucide="search"></i><input type="text" placeholder="Filter influencers..." id="inf-filter"></div>
+        <div class="search-filter"><i data-lucide="search"></i><input type="text" placeholder="Filter by name, handle, location, tag..." id="inf-filter"></div>
         <div style="margin-left:auto;display:flex;gap:8px">
           <button class="btn btn-secondary btn-sm" id="inf-export"><i data-lucide="download"></i> Export</button>
           ${canEdit() ? '<button class="btn btn-primary btn-sm" id="new-inf-btn"><i data-lucide="plus"></i> Add Influencer</button>' : ''}
@@ -1323,13 +1389,14 @@ async function renderInfluencers(container) {
           <thead><tr>
             <th style="width:36px"><input type="checkbox" id="inf-select-all"></th>
             <th data-key="name">Name</th>
-            <th data-key="handle">Handle</th>
             <th data-key="platform">Platform</th>
-            <th data-key="followers">Followers</th>
+            <th data-key="followers">Tier / Followers</th>
+            <th data-key="engagement_rate">Engage %</th>
             <th data-key="location">Location</th>
-            <th data-key="category">Type</th>
+            <th>Tags</th>
             <th data-key="email">Email</th>
-            <th data-key="pipeline_stage">Relationship</th>
+            <th data-key="rate">Rate</th>
+            <th data-key="pipeline_stage">Stage</th>
             <th data-key="last_contacted">Last Contact</th>
             <th>Actions</th>
           </tr></thead>
@@ -1339,13 +1406,11 @@ async function renderInfluencers(container) {
     `;
     lucide.createIcons({ nameAttr: 'data-lucide' });
 
-    // Pipeline clicks
     $$('.pipeline-card', container).forEach(c => c.onclick = () => {
       activeFilter = activeFilter === c.dataset.stage ? '' : c.dataset.stage;
       render();
     });
 
-    // Filter
     $('#inf-filter')?.addEventListener('input', (e) => {
       const q = e.target.value.toLowerCase();
       $$('#inf-tbody tr').forEach(tr => {
@@ -1353,12 +1418,9 @@ async function renderInfluencers(container) {
       });
     });
 
-    // Export
     $('#inf-export').onclick = () => csvExport(f, 'influencers');
-    // New
-    $('#new-inf-btn').onclick = () => editInfluencer(null);
+    if ($('#new-inf-btn')) $('#new-inf-btn').onclick = () => editInfluencer(null);
 
-    // Bulk
     selected = new Set();
     function bindCheck() {
       $$('.inf-check').forEach(cb => {
@@ -1379,12 +1441,12 @@ async function renderInfluencers(container) {
         if (!this.value) return;
         for (const id of selected) await sb.from('influencers').update({ pipeline_stage: this.value }).eq('id', id);
         toast('Stage updated', 'success');
-        renderInfluencers(container);
+        navigate('influencers');
       };
       $('#bulk-delete-inf').onclick = () => openConfirm('Delete Influencers', `Delete ${selected.size} influencer(s)?`, async () => {
         for (const id of selected) await sb.from('influencers').delete().eq('id', id);
         toast('Deleted', 'success');
-        renderInfluencers(container);
+        navigate('influencers');
       });
     }
     bindCheck();
@@ -1393,21 +1455,729 @@ async function renderInfluencers(container) {
       $$('.inf-check').forEach(cb => { cb.checked = selectAll.checked; if (cb.checked) selected.add(cb.value); else selected.delete(cb.value); });
       updateBulk();
     };
-
-    // Sort
     const table = $('table', container);
     if (table) makeSortable(table, f, rowHTML, $('#inf-tbody'), { onAfterSort: bindCheck });
   }
   render();
 }
 
+// ---- TAB: Posts & Performance ----
+async function renderInfPosts(container) {
+  const [postsRes, influencersRes] = await Promise.all([
+    sb.from('influencer_posts').select('*').order('posted_at', { ascending: false }),
+    sb.from('influencers').select('id,name,handle,platform'),
+  ]);
+  const posts = postsRes.data || [];
+  const influencers = influencersRes.data || [];
+  const infMap = {};
+  influencers.forEach(i => infMap[i.id] = i);
+
+  // KPIs
+  const totalViews = posts.reduce((s, p) => s + (p.views || 0), 0);
+  const totalEng = posts.reduce((s, p) => s + (p.likes || 0) + (p.comments || 0) + (p.shares || 0) + (p.reposts || 0) + (p.forwards || 0) + (p.saves || 0), 0);
+  const avgEng = posts.length ? (totalEng / posts.length).toFixed(0) : 0;
+
+  container.innerHTML = `
+    <div class="kpi-grid" style="grid-template-columns:repeat(5,1fr);margin-bottom:20px">
+      <div class="kpi-card"><div class="kpi-label">Total Posts Tracked</div><div class="kpi-value">${posts.length}</div></div>
+      <div class="kpi-card"><div class="kpi-label">Total Views</div><div class="kpi-value">${totalViews.toLocaleString()}</div></div>
+      <div class="kpi-card"><div class="kpi-label">Total Engagement</div><div class="kpi-value">${totalEng.toLocaleString()}</div></div>
+      <div class="kpi-card"><div class="kpi-label">Avg Engagement/Post</div><div class="kpi-value">${Number(avgEng).toLocaleString()}</div></div>
+      <div class="kpi-card"><div class="kpi-label">Total Promo Uses</div><div class="kpi-value">${posts.reduce((s,p) => s + (p.promo_code_uses || 0), 0).toLocaleString()}</div></div>
+    </div>
+    <div class="table-toolbar">
+      <div class="search-filter"><i data-lucide="search"></i><input type="text" placeholder="Filter posts..." id="post-filter"></div>
+      <div style="margin-left:auto;display:flex;gap:8px">
+        <button class="btn btn-secondary btn-sm" id="post-export"><i data-lucide="download"></i> Export</button>
+        ${canEdit() ? '<button class="btn btn-primary btn-sm" id="new-post-btn"><i data-lucide="plus"></i> Log Post</button>' : ''}
+      </div>
+    </div>
+    <div class="table-wrapper">
+      <table>
+        <thead><tr>
+          <th data-key="influencer_id">Influencer</th>
+          <th data-key="platform">Platform</th>
+          <th data-key="post_type">Type</th>
+          <th data-key="posted_at">Date</th>
+          <th data-key="views">Views</th>
+          <th data-key="likes">Likes</th>
+          <th data-key="comments">Comments</th>
+          <th data-key="shares">Shares</th>
+          <th data-key="reposts">Reposts</th>
+          <th data-key="forwards">Forwards</th>
+          <th data-key="saves">Saves</th>
+          <th data-key="promo_code_uses">Promo Uses</th>
+          <th>Actions</th>
+        </tr></thead>
+        <tbody id="posts-tbody">${posts.map(p => {
+          const inf = infMap[p.influencer_id];
+          return `<tr>
+            <td><strong>${inf?.name || 'Unknown'}</strong><div style="font-size:11px;color:var(--text-muted)">${inf?.handle ? '@' + inf.handle.replace(/^@/,'') : ''}</div></td>
+            <td>${badgeHTML(p.platform || '—')}</td>
+            <td>${badgeHTML(p.post_type || 'post')}</td>
+            <td>${formatDate(p.posted_at)}</td>
+            <td><strong>${(p.views || 0).toLocaleString()}</strong></td>
+            <td>${(p.likes || 0).toLocaleString()}</td>
+            <td>${(p.comments || 0).toLocaleString()}</td>
+            <td>${(p.shares || 0).toLocaleString()}</td>
+            <td>${(p.reposts || 0).toLocaleString()}</td>
+            <td>${(p.forwards || 0).toLocaleString()}</td>
+            <td>${(p.saves || 0).toLocaleString()}</td>
+            <td>${(p.promo_code_uses || 0).toLocaleString()}</td>
+            <td class="table-actions">
+              <button class="btn-icon btn-ghost" onclick="editInfPost('${p.id}')"><i data-lucide="edit-2"></i></button>
+              <button class="btn-icon btn-ghost" onclick="updatePostMetrics('${p.id}')"><i data-lucide="refresh-cw"></i></button>
+              <button class="btn-icon btn-ghost" onclick="deleteInfPost('${p.id}')"><i data-lucide="trash-2"></i></button>
+            </td>
+          </tr>`;
+        }).join('')}</tbody>
+      </table>
+    </div>
+    ${!posts.length ? '<div class="empty-state" style="padding:48px;text-align:center"><i data-lucide="play-circle" style="width:48px;height:48px;color:var(--text-muted)"></i><h4>No posts tracked yet</h4><p style="color:var(--text-muted)">Log an influencer\'s post to start tracking performance metrics.</p></div>' : ''}
+  `;
+  lucide.createIcons({ nameAttr: 'data-lucide' });
+
+  $('#post-filter')?.addEventListener('input', (e) => {
+    const q = e.target.value.toLowerCase();
+    $$('#posts-tbody tr').forEach(tr => { tr.style.display = tr.textContent.toLowerCase().includes(q) ? '' : 'none'; });
+  });
+  $('#post-export')?.addEventListener('click', () => csvExport(posts, 'influencer_posts'));
+
+  if ($('#new-post-btn')) $('#new-post-btn').onclick = () => editInfPost(null);
+
+  const table = $('table', container);
+  if (table) makeSortable(table, posts, () => '', $('#posts-tbody'));
+}
+
+// Log/Edit Post Modal
+window.editInfPost = async function(id) {
+  let post = {};
+  if (id) {
+    const { data } = await sb.from('influencer_posts').select('*').eq('id', id).single();
+    post = data || {};
+  }
+  const { data: infList } = await sb.from('influencers').select('id,name,handle').order('name');
+  const influencers = infList || [];
+
+  openModal(id ? 'Update Post Metrics' : 'Log Influencer Post', `
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">Influencer</label>
+        <select class="form-select" id="ip-influencer">
+          <option value="">Select influencer...</option>
+          ${influencers.map(i => `<option value="${i.id}" ${post.influencer_id == i.id ? 'selected' : ''}>${i.name} ${i.handle ? '(@' + i.handle.replace(/^@/,'') + ')' : ''}</option>`).join('')}
+        </select>
+      </div>
+      <div class="form-group"><label class="form-label">Platform</label>
+        <select class="form-select" id="ip-platform">
+          ${['Instagram','TikTok','YouTube','Twitter','Facebook','LinkedIn'].map(p => `<option ${post.platform === p ? 'selected' : ''}>${p}</option>`).join('')}
+        </select>
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">Post Type</label>
+        <select class="form-select" id="ip-type">
+          ${['post','reel','story','video','live','tweet'].map(t => `<option value="${t}" ${post.post_type === t ? 'selected' : ''}>${t.charAt(0).toUpperCase() + t.slice(1)}</option>`).join('')}
+        </select>
+      </div>
+      <div class="form-group"><label class="form-label">Date Posted</label>
+        <input class="form-input" type="date" id="ip-date" value="${post.posted_at ? post.posted_at.split('T')[0] : new Date().toISOString().split('T')[0]}">
+      </div>
+    </div>
+    <div class="form-group"><label class="form-label">Post URL</label><input class="form-input" id="ip-url" value="${post.post_url || ''}" placeholder="https://..."></div>
+    <div class="form-group"><label class="form-label">Caption</label><textarea class="form-textarea" id="ip-caption" rows="2">${post.caption || ''}</textarea></div>
+    <h4 style="margin:16px 0 8px;color:var(--text-muted);font-size:13px">PERFORMANCE METRICS</h4>
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">Views</label><input class="form-input" type="number" id="ip-views" value="${post.views || 0}"></div>
+      <div class="form-group"><label class="form-label">Likes</label><input class="form-input" type="number" id="ip-likes" value="${post.likes || 0}"></div>
+      <div class="form-group"><label class="form-label">Comments</label><input class="form-input" type="number" id="ip-comments" value="${post.comments || 0}"></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">Shares</label><input class="form-input" type="number" id="ip-shares" value="${post.shares || 0}"></div>
+      <div class="form-group"><label class="form-label">Reposts</label><input class="form-input" type="number" id="ip-reposts" value="${post.reposts || 0}"></div>
+      <div class="form-group"><label class="form-label">Forwards</label><input class="form-input" type="number" id="ip-forwards" value="${post.forwards || 0}"></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">Saves</label><input class="form-input" type="number" id="ip-saves" value="${post.saves || 0}"></div>
+      <div class="form-group"><label class="form-label">Link Clicks</label><input class="form-input" type="number" id="ip-clicks" value="${post.link_clicks || 0}"></div>
+      <div class="form-group"><label class="form-label">Promo Code Uses</label><input class="form-input" type="number" id="ip-promo" value="${post.promo_code_uses || 0}"></div>
+    </div>
+  `, `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button><button class="btn btn-primary" id="save-ip-btn">${id ? 'Update Metrics' : 'Log Post'}</button>`);
+
+  $('#save-ip-btn').onclick = async () => {
+    const obj = {
+      influencer_id: parseInt($('#ip-influencer').value) || null,
+      platform: $('#ip-platform').value,
+      post_type: $('#ip-type').value,
+      posted_at: $('#ip-date').value ? new Date($('#ip-date').value).toISOString() : null,
+      post_url: $('#ip-url').value,
+      caption: $('#ip-caption').value,
+      views: parseInt($('#ip-views').value) || 0,
+      likes: parseInt($('#ip-likes').value) || 0,
+      comments: parseInt($('#ip-comments').value) || 0,
+      shares: parseInt($('#ip-shares').value) || 0,
+      reposts: parseInt($('#ip-reposts').value) || 0,
+      forwards: parseInt($('#ip-forwards').value) || 0,
+      saves: parseInt($('#ip-saves').value) || 0,
+      link_clicks: parseInt($('#ip-clicks').value) || 0,
+      promo_code_uses: parseInt($('#ip-promo').value) || 0,
+      updated_at: new Date().toISOString(),
+    };
+    if (!obj.influencer_id) return toast('Select an influencer', 'error');
+    if (id) {
+      await sb.from('influencer_posts').update(obj).eq('id', id);
+      // Save snapshot
+      await sb.from('influencer_post_metrics').insert({
+        post_id: id, influencer_id: obj.influencer_id, snapshot_label: 'manual',
+        views: obj.views, likes: obj.likes, comments: obj.comments, shares: obj.shares,
+        reposts: obj.reposts, forwards: obj.forwards, saves: obj.saves,
+        link_clicks: obj.link_clicks, promo_code_uses: obj.promo_code_uses,
+      });
+      toast('Post metrics updated', 'success');
+    } else {
+      await sb.from('influencer_posts').insert(obj);
+      toast('Post logged', 'success');
+    }
+    closeModal();
+    await logActivity('influencer_post', `${id ? 'Updated' : 'Logged'} influencer post`);
+    infActiveTab = 'posts';
+    navigate('influencers');
+  };
+};
+
+window.updatePostMetrics = function(id) { editInfPost(id); };
+
+window.deleteInfPost = function(id) {
+  openConfirm('Delete Post', 'Delete this tracked post?', async () => {
+    await sb.from('influencer_posts').delete().eq('id', id);
+    toast('Post deleted', 'success');
+    infActiveTab = 'posts';
+    navigate('influencers');
+  });
+};
+
+// ---- TAB: Payments ----
+async function renderInfPayments(container) {
+  const [paymentsRes, influencersRes, postsRes] = await Promise.all([
+    sb.from('influencer_payments').select('*').order('created_at', { ascending: false }),
+    sb.from('influencers').select('id,name,handle,rate'),
+    sb.from('influencer_posts').select('*'),
+  ]);
+  const payments = paymentsRes.data || [];
+  const influencers = influencersRes.data || [];
+  const posts = postsRes.data || [];
+  const infMap = {};
+  influencers.forEach(i => infMap[i.id] = i);
+
+  const totalPaid = payments.filter(p => p.status === 'paid').reduce((s,p) => s + (parseFloat(p.total_amount) || 0), 0);
+  const totalPending = payments.filter(p => p.status === 'pending').reduce((s,p) => s + (parseFloat(p.total_amount) || 0), 0);
+
+  container.innerHTML = `
+    <div class="kpi-grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:20px">
+      <div class="kpi-card"><div class="kpi-label">Total Paid</div><div class="kpi-value" style="color:var(--success)">$${totalPaid.toLocaleString()}</div></div>
+      <div class="kpi-card"><div class="kpi-label">Pending Payments</div><div class="kpi-value" style="color:var(--warning)">$${totalPending.toLocaleString()}</div></div>
+      <div class="kpi-card"><div class="kpi-label">Payment Records</div><div class="kpi-value">${payments.length}</div></div>
+      <div class="kpi-card"><div class="kpi-label">Avg Cost/Post</div><div class="kpi-value">${posts.length ? '$' + (totalPaid / (posts.length || 1)).toFixed(0) : '—'}</div></div>
+    </div>
+    <div class="table-toolbar">
+      <div class="search-filter"><i data-lucide="search"></i><input type="text" placeholder="Filter payments..." id="pay-filter"></div>
+      <div style="margin-left:auto;display:flex;gap:8px">
+        <button class="btn btn-secondary btn-sm" id="pay-export"><i data-lucide="download"></i> Export</button>
+        ${canEdit() ? '<button class="btn btn-primary btn-sm" id="new-pay-btn"><i data-lucide="plus"></i> Create Payment</button>' : ''}
+        ${canEdit() ? '<button class="btn btn-accent btn-sm" id="calc-pay-btn" style="background:var(--accent)"><i data-lucide="calculator"></i> Calculate from Posts</button>' : ''}
+      </div>
+    </div>
+    <div class="table-wrapper">
+      <table>
+        <thead><tr>
+          <th data-key="influencer_id">Influencer</th>
+          <th data-key="type">Type</th>
+          <th data-key="base_amount">Base</th>
+          <th data-key="performance_bonus">Performance Bonus</th>
+          <th data-key="total_amount">Total</th>
+          <th>Metrics Used</th>
+          <th data-key="status">Status</th>
+          <th data-key="created_at">Date</th>
+          <th>Actions</th>
+        </tr></thead>
+        <tbody id="pay-tbody">${payments.map(p => {
+          const inf = infMap[p.influencer_id];
+          return `<tr>
+            <td><strong>${inf?.name || 'Unknown'}</strong></td>
+            <td>${badgeHTML(p.type || 'campaign')}</td>
+            <td>$${(parseFloat(p.base_amount) || 0).toLocaleString()}</td>
+            <td style="color:var(--success)">+$${(parseFloat(p.performance_bonus) || 0).toLocaleString()}</td>
+            <td><strong>$${(parseFloat(p.total_amount) || 0).toLocaleString()}</strong></td>
+            <td style="font-size:11px;color:var(--text-muted)">${p.total_views ? p.total_views.toLocaleString() + ' views' : ''} ${p.total_reposts ? '/ ' + p.total_reposts.toLocaleString() + ' reposts' : ''} ${p.total_forwards ? '/ ' + p.total_forwards.toLocaleString() + ' fwds' : ''}</td>
+            <td>${badgeHTML(p.status || 'pending')}</td>
+            <td>${formatDate(p.created_at)}</td>
+            <td class="table-actions">
+              ${p.status === 'pending' ? `<button class="btn-icon btn-ghost" onclick="markPaymentPaid('${p.id}')" title="Mark Paid"><i data-lucide="check-circle"></i></button>` : ''}
+              <button class="btn-icon btn-ghost" onclick="deletePayment('${p.id}')"><i data-lucide="trash-2"></i></button>
+            </td>
+          </tr>`;
+        }).join('')}</tbody>
+      </table>
+    </div>
+    ${!payments.length ? '<div class="empty-state" style="padding:48px;text-align:center"><i data-lucide="credit-card" style="width:48px;height:48px;color:var(--text-muted)"></i><h4>No payments yet</h4><p style="color:var(--text-muted)">Create a payment or calculate from tracked post performance.</p></div>' : ''}
+  `;
+  lucide.createIcons({ nameAttr: 'data-lucide' });
+
+  $('#pay-filter')?.addEventListener('input', (e) => {
+    const q = e.target.value.toLowerCase();
+    $$('#pay-tbody tr').forEach(tr => { tr.style.display = tr.textContent.toLowerCase().includes(q) ? '' : 'none'; });
+  });
+  $('#pay-export')?.addEventListener('click', () => csvExport(payments, 'influencer_payments'));
+
+  if ($('#new-pay-btn')) $('#new-pay-btn').onclick = () => createPayment(influencers);
+  if ($('#calc-pay-btn')) $('#calc-pay-btn').onclick = () => calculatePaymentFromPosts(influencers, posts);
+}
+
+window.createPayment = function(influencers) {
+  openModal('Create Payment', `
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">Influencer</label>
+        <select class="form-select" id="pay-inf">
+          <option value="">Select...</option>
+          ${influencers.map(i => `<option value="${i.id}">${i.name}</option>`).join('')}
+        </select>
+      </div>
+      <div class="form-group"><label class="form-label">Type</label>
+        <select class="form-select" id="pay-type">
+          <option value="campaign">Campaign</option>
+          <option value="bonus">Bonus</option>
+          <option value="ambassador_reward">Ambassador Reward</option>
+          <option value="referral">Referral</option>
+        </select>
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">Base Amount ($)</label><input class="form-input" type="number" id="pay-base" value="0"></div>
+      <div class="form-group"><label class="form-label">Performance Bonus ($)</label><input class="form-input" type="number" id="pay-bonus" value="0"></div>
+    </div>
+    <div class="form-group"><label class="form-label">Notes</label><textarea class="form-textarea" id="pay-notes" rows="2"></textarea></div>
+  `, `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button><button class="btn btn-primary" id="save-pay-btn">Create</button>`);
+
+  $('#save-pay-btn').onclick = async () => {
+    const base = parseFloat($('#pay-base').value) || 0;
+    const bonus = parseFloat($('#pay-bonus').value) || 0;
+    await sb.from('influencer_payments').insert({
+      influencer_id: parseInt($('#pay-inf').value) || null,
+      type: $('#pay-type').value,
+      base_amount: base,
+      performance_bonus: bonus,
+      total_amount: base + bonus,
+      status: 'pending',
+      notes: $('#pay-notes').value,
+    });
+    closeModal();
+    toast('Payment created', 'success');
+    infActiveTab = 'payments';
+    navigate('influencers');
+  };
+};
+
+window.calculatePaymentFromPosts = function(influencers, posts) {
+  openModal('Calculate Performance Payment', `
+    <p style="color:var(--text-muted);font-size:13px;margin-bottom:16px">Select an influencer to calculate their payment based on post performance metrics.</p>
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">Influencer</label>
+        <select class="form-select" id="calc-inf">
+          <option value="">Select...</option>
+          ${influencers.map(i => `<option value="${i.id}" data-rate="${i.rate || 0}">${i.name} (base rate: $${i.rate || 0})</option>`).join('')}
+        </select>
+      </div>
+    </div>
+    <h4 style="margin:12px 0 8px;font-size:13px;color:var(--text-muted)">BONUS RATES</h4>
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">$ per 10K views</label><input class="form-input" type="number" step="0.01" id="calc-view-rate" value="50"></div>
+      <div class="form-group"><label class="form-label">$ per 1K reposts</label><input class="form-input" type="number" step="0.01" id="calc-repost-rate" value="25"></div>
+      <div class="form-group"><label class="form-label">$ per 1K forwards</label><input class="form-input" type="number" step="0.01" id="calc-fwd-rate" value="25"></div>
+    </div>
+    <div id="calc-result" style="margin-top:16px;padding:16px;background:var(--card-bg);border:1px solid var(--border);border-radius:8px;display:none">
+      <div style="font-size:13px;color:var(--text-muted)" id="calc-breakdown"></div>
+      <div style="font-size:20px;font-weight:700;margin-top:8px" id="calc-total"></div>
+    </div>
+  `, `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button><button class="btn btn-accent" id="calc-btn" style="background:var(--accent)">Calculate</button><button class="btn btn-primary" id="gen-pay-btn" style="display:none">Generate Payment</button>`);
+
+  let calcResult = null;
+  $('#calc-btn').onclick = () => {
+    const infId = parseInt($('#calc-inf').value);
+    if (!infId) return toast('Select an influencer', 'error');
+    const inf = influencers.find(i => i.id === infId);
+    const infPosts = posts.filter(p => p.influencer_id === infId);
+    if (!infPosts.length) return toast('No tracked posts for this influencer', 'error');
+
+    const totalViews = infPosts.reduce((s,p) => s + (p.views || 0), 0);
+    const totalReposts = infPosts.reduce((s,p) => s + (p.reposts || 0), 0);
+    const totalForwards = infPosts.reduce((s,p) => s + (p.forwards || 0), 0);
+    const baseRate = parseFloat(inf?.rate) || 0;
+    const viewRate = parseFloat($('#calc-view-rate').value) || 0;
+    const repostRate = parseFloat($('#calc-repost-rate').value) || 0;
+    const fwdRate = parseFloat($('#calc-fwd-rate').value) || 0;
+
+    const viewBonus = (totalViews / 10000) * viewRate;
+    const repostBonus = (totalReposts / 1000) * repostRate;
+    const fwdBonus = (totalForwards / 1000) * fwdRate;
+    const perfBonus = viewBonus + repostBonus + fwdBonus;
+    const total = baseRate + perfBonus;
+
+    calcResult = { infId, baseRate, perfBonus, total, totalViews, totalReposts, totalForwards, viewRate, repostRate, fwdRate };
+
+    $('#calc-result').style.display = 'block';
+    $('#calc-breakdown').innerHTML = `
+      <div>${infPosts.length} posts tracked</div>
+      <div>Base rate: <strong>$${baseRate.toLocaleString()}</strong></div>
+      <div>View bonus: ${totalViews.toLocaleString()} views x $${viewRate}/10K = <strong>$${viewBonus.toFixed(2)}</strong></div>
+      <div>Repost bonus: ${totalReposts.toLocaleString()} reposts x $${repostRate}/1K = <strong>$${repostBonus.toFixed(2)}</strong></div>
+      <div>Forward bonus: ${totalForwards.toLocaleString()} forwards x $${fwdRate}/1K = <strong>$${fwdBonus.toFixed(2)}</strong></div>
+    `;
+    $('#calc-total').innerHTML = `Total: <span style="color:var(--success)">$${total.toFixed(2)}</span>`;
+    $('#gen-pay-btn').style.display = '';
+  };
+
+  $('#gen-pay-btn').onclick = async () => {
+    if (!calcResult) return;
+    await sb.from('influencer_payments').insert({
+      influencer_id: calcResult.infId,
+      type: 'campaign',
+      base_amount: calcResult.baseRate,
+      performance_bonus: calcResult.perfBonus,
+      total_amount: calcResult.total,
+      total_views: calcResult.totalViews,
+      total_reposts: calcResult.totalReposts,
+      total_forwards: calcResult.totalForwards,
+      rate_per_10k_views: calcResult.viewRate,
+      rate_per_1k_reposts: calcResult.repostRate,
+      rate_per_1k_forwards: calcResult.fwdRate,
+      status: 'pending',
+    });
+    closeModal();
+    toast('Performance payment generated', 'success');
+    await logActivity('influencer_payment', 'Generated performance-based payment');
+    infActiveTab = 'payments';
+    navigate('influencers');
+  };
+};
+
+window.markPaymentPaid = async function(id) {
+  await sb.from('influencer_payments').update({ status: 'paid', paid_at: new Date().toISOString() }).eq('id', id);
+  toast('Marked as paid', 'success');
+  infActiveTab = 'payments';
+  navigate('influencers');
+};
+
+window.deletePayment = function(id) {
+  openConfirm('Delete Payment', 'Delete this payment record?', async () => {
+    await sb.from('influencer_payments').delete().eq('id', id);
+    toast('Deleted', 'success');
+    infActiveTab = 'payments';
+    navigate('influencers');
+  });
+};
+
+// ---- TAB: Interactions (CRM Timeline) ----
+async function renderInfInteractions(container) {
+  const [interactionsRes, influencersRes] = await Promise.all([
+    sb.from('influencer_interactions').select('*').order('created_at', { ascending: false }),
+    sb.from('influencers').select('id,name,handle'),
+  ]);
+  const interactions = interactionsRes.data || [];
+  const influencers = influencersRes.data || [];
+  const infMap = {};
+  influencers.forEach(i => infMap[i.id] = i);
+
+  const typeIcons = { dm: 'message-circle', email: 'mail', call: 'phone', meeting: 'calendar', gift: 'gift', sample: 'package', note: 'file-text' };
+  const typeColors = { dm: '#3b82f6', email: '#8b5cf6', call: '#22c55e', meeting: '#f59e0b', gift: '#ec4899', sample: '#f97316', note: '#94a3b8' };
+
+  container.innerHTML = `
+    <div class="kpi-grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:20px">
+      <div class="kpi-card"><div class="kpi-label">Total Interactions</div><div class="kpi-value">${interactions.length}</div></div>
+      <div class="kpi-card"><div class="kpi-label">This Week</div><div class="kpi-value">${interactions.filter(i => new Date(i.created_at) > new Date(Date.now() - 7 * 86400000)).length}</div></div>
+      <div class="kpi-card"><div class="kpi-label">Gifts/Samples Sent</div><div class="kpi-value">${interactions.filter(i => i.type === 'gift' || i.type === 'sample').length}</div></div>
+      <div class="kpi-card"><div class="kpi-label">Meetings</div><div class="kpi-value">${interactions.filter(i => i.type === 'meeting').length}</div></div>
+    </div>
+    <div class="table-toolbar">
+      <div class="search-filter"><i data-lucide="search"></i><input type="text" placeholder="Filter interactions..." id="int-filter"></div>
+      <select class="form-select" style="width:140px" id="int-type-filter">
+        <option value="">All Types</option>
+        ${Object.keys(typeIcons).map(t => `<option value="${t}">${t.charAt(0).toUpperCase() + t.slice(1)}</option>`).join('')}
+      </select>
+      <div style="margin-left:auto">
+        ${canEdit() ? '<button class="btn btn-primary btn-sm" id="new-int-btn"><i data-lucide="plus"></i> Log Interaction</button>' : ''}
+      </div>
+    </div>
+    <div id="interactions-list" style="display:flex;flex-direction:column;gap:8px;margin-top:16px">
+      ${interactions.map(int => {
+        const inf = infMap[int.influencer_id];
+        return `<div class="interaction-card" style="display:flex;gap:16px;padding:16px;background:var(--card-bg);border:1px solid var(--border);border-radius:8px;align-items:flex-start">
+          <div style="width:36px;height:36px;border-radius:50%;background:${typeColors[int.type] || '#666'}20;display:flex;align-items:center;justify-content:center;flex-shrink:0">
+            <i data-lucide="${typeIcons[int.type] || 'file-text'}" style="width:16px;height:16px;color:${typeColors[int.type] || '#666'}"></i>
+          </div>
+          <div style="flex:1;min-width:0">
+            <div style="display:flex;justify-content:space-between;align-items:center">
+              <div><strong>${inf?.name || 'Unknown'}</strong> <span style="color:var(--text-muted);font-size:12px">${inf?.handle ? '@' + inf.handle.replace(/^@/,'') : ''}</span></div>
+              <div style="display:flex;align-items:center;gap:8px">
+                <span style="font-size:12px;color:var(--text-muted)">${formatDateTime(int.created_at)}</span>
+                ${badgeHTML(int.type)}
+              </div>
+            </div>
+            ${int.subject ? `<div style="font-weight:500;margin-top:4px">${escapeHtml(int.subject)}</div>` : ''}
+            ${int.notes ? `<div style="color:var(--text-muted);font-size:13px;margin-top:4px">${escapeHtml(int.notes)}</div>` : ''}
+          </div>
+          <button class="btn-icon btn-ghost" onclick="deleteInteraction('${int.id}')" style="flex-shrink:0"><i data-lucide="trash-2"></i></button>
+        </div>`;
+      }).join('')}
+      ${!interactions.length ? '<div class="empty-state" style="padding:48px;text-align:center"><i data-lucide="message-circle" style="width:48px;height:48px;color:var(--text-muted)"></i><h4>No interactions logged</h4><p style="color:var(--text-muted)">Log DMs, calls, meetings, gifts, and more to build your relationship history.</p></div>' : ''}
+    </div>
+  `;
+  lucide.createIcons({ nameAttr: 'data-lucide' });
+
+  const allCards = $$('.interaction-card', container);
+  $('#int-filter')?.addEventListener('input', (e) => {
+    const q = e.target.value.toLowerCase();
+    allCards.forEach(c => { c.style.display = c.textContent.toLowerCase().includes(q) ? '' : 'none'; });
+  });
+  $('#int-type-filter')?.addEventListener('change', (e) => {
+    const cards = $$('.interaction-card', container);
+    const t = e.target.value;
+    // Re-filter based on type badge text
+    interactions.forEach((int, idx) => {
+      if (cards[idx]) cards[idx].style.display = (!t || int.type === t) ? '' : 'none';
+    });
+  });
+
+  if ($('#new-int-btn')) $('#new-int-btn').onclick = () => logInteraction(influencers);
+};
+
+window.logInteraction = function(influencers) {
+  openModal('Log Interaction', `
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">Influencer</label>
+        <select class="form-select" id="li-inf">
+          <option value="">Select...</option>
+          ${influencers.map(i => `<option value="${i.id}">${i.name} ${i.handle ? '(@' + i.handle.replace(/^@/,'') + ')' : ''}</option>`).join('')}
+        </select>
+      </div>
+      <div class="form-group"><label class="form-label">Type</label>
+        <select class="form-select" id="li-type">
+          <option value="dm">DM</option>
+          <option value="email">Email</option>
+          <option value="call">Call</option>
+          <option value="meeting">Meeting</option>
+          <option value="gift">Gift Sent</option>
+          <option value="sample">Sample Sent</option>
+          <option value="note">Note</option>
+        </select>
+      </div>
+    </div>
+    <div class="form-group"><label class="form-label">Subject</label><input class="form-input" id="li-subject" placeholder="Brief subject line"></div>
+    <div class="form-group"><label class="form-label">Notes</label><textarea class="form-textarea" id="li-notes" rows="3" placeholder="Details about this interaction..."></textarea></div>
+  `, `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button><button class="btn btn-primary" id="save-li-btn">Log</button>`);
+
+  $('#save-li-btn').onclick = async () => {
+    const infId = parseInt($('#li-inf').value);
+    if (!infId) return toast('Select an influencer', 'error');
+    await sb.from('influencer_interactions').insert({
+      influencer_id: infId,
+      type: $('#li-type').value,
+      subject: $('#li-subject').value,
+      notes: $('#li-notes').value,
+      employee_id: currentUser?.id,
+    });
+    // Update last_contacted on the influencer
+    await sb.from('influencers').update({ last_contacted: new Date().toISOString() }).eq('id', infId);
+    closeModal();
+    toast('Interaction logged', 'success');
+    await logActivity('influencer_interaction', `Logged ${$('#li-type').value} interaction`);
+    infActiveTab = 'interactions';
+    navigate('influencers');
+  };
+};
+
+window.deleteInteraction = function(id) {
+  openConfirm('Delete Interaction', 'Remove this interaction?', async () => {
+    await sb.from('influencer_interactions').delete().eq('id', id);
+    toast('Deleted', 'success');
+    infActiveTab = 'interactions';
+    navigate('influencers');
+  });
+};
+
+// ---- TAB: Ambassador Program ----
+async function renderInfAmbassador(container) {
+  const [influencersRes, paymentsRes, postsRes, milestonesRes, tiersRes] = await Promise.all([
+    sb.from('influencers').select('*').order('followers', { ascending: false }),
+    sb.from('influencer_payments').select('*'),
+    sb.from('influencer_posts').select('*'),
+    sb.from('influencer_milestones').select('*'),
+    sb.from('influencer_ambassador_tiers').select('*').order('sort_order'),
+  ]);
+  const influencers = influencersRes.data || [];
+  const payments = paymentsRes.data || [];
+  const posts = postsRes.data || [];
+  const milestones = milestonesRes.data || [];
+  const tiers = tiersRes.data || [];
+
+  // Calculate stats per influencer
+  const infStats = influencers.map(inf => {
+    const infPosts = posts.filter(p => p.influencer_id === inf.id);
+    const infPayments = payments.filter(p => p.influencer_id === inf.id);
+    const totalViews = infPosts.reduce((s,p) => s + (p.views || 0), 0);
+    const totalEng = infPosts.reduce((s,p) => s + (p.likes||0) + (p.comments||0) + (p.shares||0) + (p.reposts||0) + (p.forwards||0) + (p.saves||0), 0);
+    const totalPaid = infPayments.filter(p => p.status === 'paid').reduce((s,p) => s + (parseFloat(p.total_amount) || 0), 0);
+    const collabCount = infPosts.length;
+    // Determine ambassador tier
+    const tierObj = [...tiers].reverse().find(t => collabCount >= t.min_collabs) || tiers[0];
+    const infMilestones = milestones.filter(m => m.influencer_id === inf.id);
+    return { ...inf, totalViews, totalEng, totalPaid, collabCount, tierObj, infMilestones, postCount: infPosts.length };
+  });
+
+  // Sort by total views (leaderboard)
+  const leaderboard = [...infStats].sort((a, b) => b.totalViews - a.totalViews).slice(0, 20);
+
+  container.innerHTML = `
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:24px">
+      <div>
+        <h3 style="margin-bottom:12px">Ambassador Tiers</h3>
+        <div style="display:flex;flex-direction:column;gap:8px">
+          ${tiers.map(t => {
+            const count = infStats.filter(i => i.tierObj?.name === t.name).length;
+            const perks = (() => { try { return JSON.parse(t.perks || '[]'); } catch { return []; } })();
+            return `<div style="padding:16px;background:var(--card-bg);border:1px solid var(--border);border-radius:8px;border-left:4px solid ${t.color}">
+              <div style="display:flex;justify-content:space-between;align-items:center">
+                <div><strong style="color:${t.color}">${t.name}</strong> <span style="color:var(--text-muted);font-size:12px">(${t.min_collabs}+ collabs)</span></div>
+                <span class="badge">${count} influencer${count !== 1 ? 's' : ''}</span>
+              </div>
+              <div style="font-size:12px;color:var(--text-muted);margin-top:4px">+${t.rate_bonus_percent}% rate bonus</div>
+              <div style="font-size:11px;color:var(--text-muted);margin-top:4px">${perks.join(' • ')}</div>
+            </div>`;
+          }).join('')}
+        </div>
+      </div>
+      <div>
+        <h3 style="margin-bottom:12px">Performance Leaderboard</h3>
+        <div class="table-wrapper"><table>
+          <thead><tr><th>#</th><th>Influencer</th><th>Tier</th><th>Posts</th><th>Total Views</th><th>Total Paid</th></tr></thead>
+          <tbody>${leaderboard.map((inf, idx) => `<tr>
+            <td style="font-weight:600;color:${idx < 3 ? 'var(--accent)' : 'var(--text-muted)'}">${idx + 1}</td>
+            <td><strong>${inf.name}</strong><div style="font-size:11px;color:var(--text-muted)">${infTier(inf.followers)}</div></td>
+            <td>${ambassadorBadge(inf.tierObj?.name)}</td>
+            <td>${inf.postCount}</td>
+            <td>${inf.totalViews.toLocaleString()}</td>
+            <td>$${inf.totalPaid.toLocaleString()}</td>
+          </tr>`).join('')}</tbody>
+        </table></div>
+      </div>
+    </div>
+
+    <h3 style="margin-bottom:12px">All Influencers — Ambassador Status</h3>
+    <div class="table-wrapper"><table>
+      <thead><tr>
+        <th data-key="name">Influencer</th>
+        <th>Ambassador Tier</th>
+        <th data-key="postCount">Posts</th>
+        <th data-key="totalViews">Total Views</th>
+        <th data-key="totalEng">Total Engagement</th>
+        <th data-key="totalPaid">Total Paid</th>
+        <th>CPV (per 1K)</th>
+        <th>Milestones</th>
+      </tr></thead>
+      <tbody>${infStats.map(inf => `<tr>
+        <td><strong>${inf.name}</strong><div style="font-size:11px;color:var(--text-muted)">${inf.handle ? '@' + inf.handle.replace(/^@/,'') : ''} • ${infTier(inf.followers)}</div></td>
+        <td>${ambassadorBadge(inf.tierObj?.name)}<div style="font-size:11px;color:var(--text-muted)">${inf.collabCount}/${(tiers.find(t => t.sort_order === (inf.tierObj?.sort_order || 0) + 1) || { min_collabs: '∞' }).min_collabs} to next tier</div></td>
+        <td>${inf.postCount}</td>
+        <td>${inf.totalViews.toLocaleString()}</td>
+        <td>${inf.totalEng.toLocaleString()}</td>
+        <td>$${inf.totalPaid.toLocaleString()}</td>
+        <td>${cpv(inf.totalPaid, inf.totalViews)}</td>
+        <td>${inf.infMilestones.map(m => `<span class="badge badge-accent" style="font-size:10px;margin:1px" title="${m.description || ''}">${m.label}</span>`).join('') || '<span style="color:var(--text-muted);font-size:12px">—</span>'}</td>
+      </tr>`).join('')}</tbody>
+    </table></div>
+  `;
+  lucide.createIcons({ nameAttr: 'data-lucide' });
+}
+
+// ---- Influencer Profile View ----
+window.viewInfluencerProfile = async function(id) {
+  const [infRes, postsRes, paymentsRes, interactionsRes, milestonesRes] = await Promise.all([
+    sb.from('influencers').select('*').eq('id', id).single(),
+    sb.from('influencer_posts').select('*').eq('influencer_id', id).order('posted_at', { ascending: false }),
+    sb.from('influencer_payments').select('*').eq('influencer_id', id).order('created_at', { ascending: false }),
+    sb.from('influencer_interactions').select('*').eq('influencer_id', id).order('created_at', { ascending: false }),
+    sb.from('influencer_milestones').select('*').eq('influencer_id', id),
+  ]);
+  const inf = infRes.data;
+  if (!inf) return toast('Influencer not found', 'error');
+  const posts = postsRes.data || [];
+  const payments = paymentsRes.data || [];
+  const interactions = interactionsRes.data || [];
+  const miles = milestonesRes.data || [];
+
+  const totalViews = posts.reduce((s,p) => s + (p.views || 0), 0);
+  const totalEng = posts.reduce((s,p) => s + (p.likes||0) + (p.comments||0) + (p.shares||0) + (p.reposts||0) + (p.forwards||0) + (p.saves||0), 0);
+  const totalPaid = payments.filter(p => p.status === 'paid').reduce((s,p) => s + (parseFloat(p.total_amount) || 0), 0);
+  const tier = infTier(inf.followers);
+  const tags = parseJSON(inf.tags);
+
+  openModal(`${inf.name} — Profile`, `
+    <div style="display:flex;gap:20px;align-items:flex-start;margin-bottom:20px">
+      <div style="width:64px;height:64px;border-radius:50%;background:${tierColor(tier)}20;display:flex;align-items:center;justify-content:center;flex-shrink:0">
+        <span style="font-size:24px;font-weight:700;color:${tierColor(tier)}">${getInitials(inf.name)}</span>
+      </div>
+      <div style="flex:1">
+        <h3 style="margin:0">${inf.name}</h3>
+        <div style="color:var(--text-muted)">${inf.handle ? '@' + inf.handle.replace(/^@/,'') : ''} • ${inf.platform || ''} • ${inf.location || ''}</div>
+        <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
+          <span class="badge" style="background:${tierColor(tier)}20;color:${tierColor(tier)}">${tier} (${(inf.followers || 0).toLocaleString()})</span>
+          ${badgeHTML(inf.pipeline_stage)}
+          ${inf.engagement_rate ? `<span class="badge badge-accent">${inf.engagement_rate}% engagement</span>` : ''}
+          ${tags.map(t => `<span class="badge badge-accent">${t}</span>`).join('')}
+        </div>
+      </div>
+    </div>
+    <div class="kpi-grid" style="grid-template-columns:repeat(5,1fr);margin-bottom:20px">
+      <div class="kpi-card"><div class="kpi-label">Posts</div><div class="kpi-value">${posts.length}</div></div>
+      <div class="kpi-card"><div class="kpi-label">Total Views</div><div class="kpi-value">${totalViews.toLocaleString()}</div></div>
+      <div class="kpi-card"><div class="kpi-label">Total Engagement</div><div class="kpi-value">${totalEng.toLocaleString()}</div></div>
+      <div class="kpi-card"><div class="kpi-label">Total Paid</div><div class="kpi-value">$${totalPaid.toLocaleString()}</div></div>
+      <div class="kpi-card"><div class="kpi-label">CPV (per 1K)</div><div class="kpi-value">${cpv(totalPaid, totalViews)}</div></div>
+    </div>
+    ${inf.email || inf.phone ? `<div style="margin-bottom:16px;font-size:13px;color:var(--text-muted)">${inf.email ? `<a href="mailto:${inf.email}" style="color:var(--accent)">${inf.email}</a>` : ''} ${inf.phone ? `• ${inf.phone}` : ''} ${inf.rate ? `• Rate: $${Number(inf.rate).toLocaleString()}` : ''}</div>` : ''}
+    ${inf.notes ? `<div style="margin-bottom:16px;padding:12px;background:var(--bg);border-radius:8px;font-size:13px">${escapeHtml(inf.notes)}</div>` : ''}
+    ${miles.length ? `<div style="margin-bottom:16px"><strong style="font-size:13px">Milestones:</strong> ${miles.map(m => `<span class="badge badge-accent" style="margin:2px">${m.label}</span>`).join('')}</div>` : ''}
+    ${posts.length ? `<h4 style="margin:16px 0 8px">Recent Posts</h4>
+    <div class="table-wrapper"><table style="font-size:12px">
+      <thead><tr><th>Date</th><th>Type</th><th>Views</th><th>Likes</th><th>Reposts</th><th>Forwards</th></tr></thead>
+      <tbody>${posts.slice(0, 10).map(p => `<tr>
+        <td>${formatDate(p.posted_at)}</td>
+        <td>${badgeHTML(p.post_type || 'post')}</td>
+        <td>${(p.views || 0).toLocaleString()}</td>
+        <td>${(p.likes || 0).toLocaleString()}</td>
+        <td>${(p.reposts || 0).toLocaleString()}</td>
+        <td>${(p.forwards || 0).toLocaleString()}</td>
+      </tr>`).join('')}</tbody>
+    </table></div>` : ''}
+    ${interactions.length ? `<h4 style="margin:16px 0 8px">Recent Interactions</h4>
+    <div style="max-height:200px;overflow-y:auto">${interactions.slice(0, 10).map(int => `
+      <div style="padding:8px 0;border-bottom:1px solid var(--border);font-size:13px">
+        ${badgeHTML(int.type)} <strong>${int.subject || ''}</strong> <span style="color:var(--text-muted)">${formatDateTime(int.created_at)}</span>
+        ${int.notes ? `<div style="color:var(--text-muted);font-size:12px;margin-top:2px">${escapeHtml(int.notes)}</div>` : ''}
+      </div>
+    `).join('')}</div>` : ''}
+  `, `<button class="btn btn-secondary" onclick="closeModal()">Close</button><button class="btn btn-primary" onclick="editInfluencer('${id}')">Edit</button>`);
+};
+
+// ---- Edit/Add Influencer Modal ----
 window.editInfluencer = async function(id) {
   let inf = {};
   if (id) {
     const { data } = await sb.from('influencers').select('*').eq('id', id).single();
     inf = data || {};
   }
-  const stages = ['prospect', 'outreach', 'negotiation', 'contracted', 'completed'];
+  const stages = ['lead', 'prospect', 'outreach', 'negotiation', 'contracted', 'completed'];
+  const categories = ['food','lifestyle','beauty','fitness','fashion','travel','tech','parenting','health','music','art','other'];
+  const contentStyles = ['reels-heavy','story-heavy','photo-focused','long-form-video','live-streams','carousel','mixed'];
+
   openModal(id ? 'Edit Influencer' : 'Add Influencer', `
     <div class="form-row">
       <div class="form-group"><label class="form-label">Name</label><input class="form-input" id="inf-name" value="${inf.name || ''}"></div>
@@ -1419,9 +2189,9 @@ window.editInfluencer = async function(id) {
           ${['Instagram','TikTok','YouTube','Twitter','Facebook','LinkedIn'].map(p => `<option ${inf.platform === p ? 'selected' : ''}>${p}</option>`).join('')}
         </select>
       </div>
-      <div class="form-group"><label class="form-label">Relationship</label>
+      <div class="form-group"><label class="form-label">Stage</label>
         <select class="form-select" id="inf-stage">
-          ${stages.map(s => `<option value="${s}" ${inf.pipeline_stage === s ? 'selected' : ''}>${s}</option>`).join('')}
+          ${stages.map(s => `<option value="${s}" ${inf.pipeline_stage === s ? 'selected' : ''}>${s.charAt(0).toUpperCase() + s.slice(1)}</option>`).join('')}
         </select>
       </div>
     </div>
@@ -1430,10 +2200,10 @@ window.editInfluencer = async function(id) {
       <div class="form-group"><label class="form-label">Engagement Rate (%)</label><input class="form-input" type="number" step="0.1" id="inf-engagement" value="${inf.engagement_rate || ''}"></div>
     </div>
     <div class="form-row">
-      <div class="form-group"><label class="form-label">Rate ($)</label><input class="form-input" type="number" id="inf-rate" value="${inf.rate || ''}"></div>
-      <div class="form-group"><label class="form-label">Type</label>
+      <div class="form-group"><label class="form-label">Base Rate ($)</label><input class="form-input" type="number" id="inf-rate" value="${inf.rate || ''}"></div>
+      <div class="form-group"><label class="form-label">Category</label>
         <select class="form-select" id="inf-category">
-          ${['food','lifestyle','beauty','fitness','fashion','travel','tech','parenting','health','music','art','other'].map(c => `<option value="${c}" ${inf.category === c ? 'selected' : ''}>${c.charAt(0).toUpperCase() + c.slice(1)}</option>`).join('')}
+          ${categories.map(c => `<option value="${c}" ${inf.category === c ? 'selected' : ''}>${c.charAt(0).toUpperCase() + c.slice(1)}</option>`).join('')}
         </select>
       </div>
     </div>
@@ -1445,6 +2215,17 @@ window.editInfluencer = async function(id) {
       <div class="form-group"><label class="form-label">Location</label><input class="form-input" id="inf-location" value="${inf.location || ''}"></div>
       <div class="form-group"><label class="form-label">Contact Owner</label>
         <select class="form-select" id="inf-owner"><option value="">None</option>${employeeOptions(inf.contact_owner)}</select>
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">Content Style</label>
+        <select class="form-select" id="inf-content-style">
+          <option value="">Not specified</option>
+          ${contentStyles.map(s => `<option value="${s}" ${inf.content_style === s ? 'selected' : ''}>${s}</option>`).join('')}
+        </select>
+      </div>
+      <div class="form-group"><label class="form-label">Audience Quality (1-10)</label>
+        <input class="form-input" type="number" min="1" max="10" id="inf-audience-quality" value="${inf.audience_quality || ''}">
       </div>
     </div>
     <div class="form-group"><label class="form-label">Tags (comma-separated)</label><input class="form-input" id="inf-tags" value="${parseJSON(inf.tags).join(', ')}"></div>
@@ -1484,6 +2265,8 @@ window.editInfluencer = async function(id) {
       phone: $('#inf-phone').value,
       location: $('#inf-location').value,
       contact_owner: $('#inf-owner').value || null,
+      content_style: $('#inf-content-style').value || null,
+      audience_quality: parseInt($('#inf-audience-quality').value) || null,
       tags: $('#inf-tags').value.split(',').map(t => t.trim()).filter(Boolean),
       notes: $('#inf-notes').value,
     };
@@ -1502,9 +2285,15 @@ window.editInfluencer = async function(id) {
 };
 
 window.deleteInfluencer = function(id) {
-  openConfirm('Delete Influencer', 'Are you sure?', async () => {
+  openConfirm('Delete Influencer', 'Are you sure? This will also remove related posts, payments, and interactions.', async () => {
+    await Promise.all([
+      sb.from('influencer_posts').delete().eq('influencer_id', id),
+      sb.from('influencer_payments').delete().eq('influencer_id', id),
+      sb.from('influencer_interactions').delete().eq('influencer_id', id),
+      sb.from('influencer_milestones').delete().eq('influencer_id', id),
+    ]);
     await sb.from('influencers').delete().eq('id', id);
-    await logActivity('delete_influencer', 'Deleted an influencer');
+    await logActivity('delete_influencer', 'Deleted an influencer and related data');
     toast('Deleted', 'success');
     navigate('influencers');
   });

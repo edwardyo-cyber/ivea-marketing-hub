@@ -50,6 +50,11 @@ const SCOPED_TABLES = [
   'loyalty_transactions', 'promotions', 'promotion_codes',
   'promotion_redemptions', 'promotion_distributions',
   'automated_triggers', 'pos_integrations',
+  // Influencer CRM tables
+  'influencer_interactions', 'influencer_campaigns', 'influencer_deliverables',
+  'influencer_posts', 'influencer_post_metrics', 'influencer_payments',
+  'influencer_promo_codes', 'influencer_ambassador_tiers',
+  'influencer_milestones', 'influencer_referrals',
 ];
 
 // Tables that are global (no restaurant_id)
