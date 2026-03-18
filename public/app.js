@@ -7288,8 +7288,12 @@ async function renderGifting(container) {
       openModal('Add Gift / Comp', `
         <div class="form-group"><label class="form-label">Influencer</label>
           <select class="form-select" id="gift-influencer"><option value="">— Select —</option>${influencers.map(i => `<option value="${i.id}">${i.name} (@${i.handle || ''})</option>`).join('')}</select></div>
-        <div class="form-group"><label class="form-label">Brand / Restaurant</label>
-          <select class="form-select" id="gift-restaurant"><option value="">— Select Brand —</option>${restaurants.map(r => `<option value="${r.id}">${r.name}</option>`).join('')}</select></div>
+        <div class="form-row">
+          <div class="form-group"><label class="form-label">Brand</label>
+            <select class="form-select" id="gift-brand"><option value="">— Select Brand —</option>${restaurants.map(r => `<option value="${r.id}">${r.name}</option>`).join('')}</select></div>
+          <div class="form-group"><label class="form-label">Location</label>
+            <select class="form-select" id="gift-location" disabled><option value="">— Select Brand first —</option></select></div>
+        </div>
         <div class="form-row"><div class="form-group"><label class="form-label">Type</label>
           <select class="form-select" id="gift-type"><option value="meal">Meal</option><option value="gift_card">Gift Card</option><option value="product">Product</option><option value="experience">Experience</option></select></div>
         <div class="form-group"><label class="form-label">Value ($)</label><input class="form-input" id="gift-value" type="number" step="0.01" placeholder="0.00"></div></div>
@@ -7298,15 +7302,26 @@ async function renderGifting(container) {
         <div class="form-group"><label class="form-label">Follow-Up Date</label><input class="form-input" id="gift-followup" type="date"></div></div>
         <div class="form-group"><label class="form-label">Notes</label><textarea class="form-textarea" id="gift-notes" rows="2"></textarea></div>
       `, `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button><button class="btn btn-primary" id="save-gift-btn">Save Gift</button>`);
+
+      // Cascade: brand → location
+      $('#gift-brand').onchange = async () => {
+        const brandId = $('#gift-brand').value;
+        const locSel = $('#gift-location');
+        if (!brandId) { locSel.innerHTML = '<option value="">— Select Brand first —</option>'; locSel.disabled = true; return; }
+        const locs = await getRestaurantLocations(brandId);
+        locSel.innerHTML = '<option value="">— All Locations —</option>' + locs.map((l, i) => `<option value="${i}">${l.name || l.address || 'Location ' + (i+1)}</option>`).join('');
+        locSel.disabled = false;
+      };
+
       $('#save-gift-btn').onclick = async () => {
         const influencer_id = parseInt($('#gift-influencer').value);
         if (!influencer_id) return toast('Select an influencer', 'error');
         const row = {
           influencer_id, type: $('#gift-type').value, value: parseFloat($('#gift-value').value) || 0,
           description: $('#gift-desc').value.trim(), notes: $('#gift-notes').value.trim(),
-          status: $('#gift-sent').value ? 'sent' : 'pending', created_by: currentUser.id,
+          status: $('#gift-sent').value ? 'sent' : 'pending',
         };
-        if ($('#gift-restaurant').value) row.restaurant_id = $('#gift-restaurant').value;
+        if ($('#gift-brand').value) row.restaurant_id = $('#gift-brand').value;
         if ($('#gift-sent').value) row.sent_date = $('#gift-sent').value;
         if ($('#gift-followup').value) row.follow_up_date = $('#gift-followup').value;
         const { error } = await sb.from('influencer_gifts').insert(row);
@@ -7474,11 +7489,35 @@ async function renderEvents(container) {
         <div class="form-group"><label class="form-label">Date</label><input class="form-input" id="ev-date" type="date"></div></div>
         <div class="form-row"><div class="form-group"><label class="form-label">Time</label><input class="form-input" id="ev-time" type="time"></div>
         <div class="form-group"><label class="form-label">Capacity</label><input class="form-input" id="ev-capacity" type="number" placeholder="0"></div></div>
-        <div class="form-group"><label class="form-label">Brand / Restaurant</label>
-          <select class="form-select" id="ev-restaurant"><option value="">— Select Brand —</option>${restaurants.map(r => `<option value="${r.id}">${r.name}</option>`).join('')}</select></div>
-        <div class="form-group"><label class="form-label">Location / Address</label><input class="form-input" id="ev-location" placeholder="Address or venue name"></div>
+        <div class="form-row">
+          <div class="form-group"><label class="form-label">Brand</label>
+            <select class="form-select" id="ev-brand"><option value="">— Select Brand —</option>${restaurants.map(r => `<option value="${r.id}">${r.name}</option>`).join('')}</select></div>
+          <div class="form-group"><label class="form-label">Location</label>
+            <select class="form-select" id="ev-loc-select" disabled><option value="">— Select Brand first —</option></select></div>
+        </div>
+        <div class="form-group"><label class="form-label">Address / Venue</label><input class="form-input" id="ev-location" placeholder="Address or venue name"></div>
         <div class="form-group"><label class="form-label">Description</label><textarea class="form-textarea" id="ev-desc" rows="2"></textarea></div>
       `, `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button><button class="btn btn-primary" id="save-event-btn">Create Event</button>`);
+
+      // Cascade: brand → location, auto-fill address
+      $('#ev-brand').onchange = async () => {
+        const brandId = $('#ev-brand').value;
+        const locSel = $('#ev-loc-select');
+        if (!brandId) { locSel.innerHTML = '<option value="">— Select Brand first —</option>'; locSel.disabled = true; return; }
+        const locs = await getRestaurantLocations(brandId);
+        locSel.innerHTML = '<option value="">— All Locations —</option>' + locs.map((l, i) => `<option value="${i}">${l.name || l.address || 'Location ' + (i+1)}</option>`).join('');
+        locSel.disabled = false;
+      };
+      $('#ev-loc-select').onchange = async () => {
+        const brandId = $('#ev-brand').value;
+        const locIdx = $('#ev-loc-select').value;
+        if (brandId && locIdx !== '') {
+          const locs = await getRestaurantLocations(brandId);
+          const loc = locs[parseInt(locIdx)];
+          if (loc && loc.address) $('#ev-location').value = loc.address + (loc.city ? ', ' + loc.city : '') + (loc.state ? ', ' + loc.state : '');
+        }
+      };
+
       $('#save-event-btn').onclick = async () => {
         const name = $('#ev-name').value.trim();
         const date = $('#ev-date').value;
@@ -7486,10 +7525,10 @@ async function renderEvents(container) {
         const row = {
           name, type: $('#ev-type').value, date, location: $('#ev-location').value.trim(),
           description: $('#ev-desc').value.trim(), capacity: parseInt($('#ev-capacity').value) || 0,
-          status: 'published', created_by: currentUser.id,
+          status: 'published',
         };
         if ($('#ev-time').value) row.time = $('#ev-time').value;
-        if ($('#ev-restaurant').value) row.restaurant_id = $('#ev-restaurant').value;
+        if ($('#ev-brand').value) row.restaurant_id = $('#ev-brand').value;
         const { error } = await sb.from('events').insert(row);
         if (error) { console.error('Event insert error:', error); return toast('Failed: ' + error.message, 'error'); }
         closeModal(); toast('Event created', 'success');
