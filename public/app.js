@@ -7193,8 +7193,8 @@ async function renderGifting(container) {
   let activeTab = 'active';
 
   function render() {
-    const active = gifts.filter(g => !['posted'].includes(g.status) && (!g.sent_date || daysDiff(g.sent_date) < 90));
-    const history = gifts.filter(g => g.status === 'posted' || (g.sent_date && daysDiff(g.sent_date) >= 90));
+    const active = gifts.filter(g => g.status !== 'posted');
+    const history = gifts.filter(g => g.status === 'posted');
     const pendingFollowUps = active.filter(g => g.follow_up_date && !g.follow_up_done && new Date(g.follow_up_date) <= new Date());
     const totalValue = gifts.reduce((s, g) => s + parseFloat(g.value || 0), 0);
     const posted = gifts.filter(g => g.status === 'posted').length;
@@ -7232,13 +7232,15 @@ async function renderGifting(container) {
     const tc = $('#gifting-tab-content');
     if (activeTab === 'active') {
       tc.innerHTML = `<div class="table-container"><table class="data-table"><thead><tr>
-        <th>Influencer</th><th>Type</th><th>Description</th><th>Value</th><th>Sent</th><th>Status</th><th>Follow-Up</th><th>Actions</th>
+        <th>Influencer</th><th>Brand</th><th>Type</th><th>Description</th><th>Value</th><th>Sent</th><th>Status</th><th>Follow-Up</th><th>Actions</th>
       </tr></thead><tbody>
         ${active.map(g => {
           const inf = infMap[g.influencer_id];
+          const rest = restaurants.find(r => r.id === g.restaurant_id);
           const overdue = g.follow_up_date && !g.follow_up_done && new Date(g.follow_up_date) <= new Date();
           return `<tr>
             <td>${inf ? inf.name : '#' + g.influencer_id}</td>
+            <td>${rest ? rest.name : '—'}</td>
             <td><span class="badge">${g.type}</span></td>
             <td>${g.description || ''}</td>
             <td>$${parseFloat(g.value||0).toFixed(2)}</td>
@@ -7249,7 +7251,7 @@ async function renderGifting(container) {
             <button class="btn btn-xs btn-danger" onclick="deleteGift(${g.id})"><i data-lucide="trash-2" style="width:14px;height:14px"></i></button></td>
           </tr>`;
         }).join('')}
-        ${!active.length ? '<tr><td colspan="8" class="text-center">No active gifts</td></tr>' : ''}
+        ${!active.length ? '<tr><td colspan="9" class="text-center">No active gifts</td></tr>' : ''}
       </tbody></table></div>`;
     } else if (activeTab === 'history') {
       tc.innerHTML = `<div style="margin-bottom:12px;text-align:right"><button class="btn btn-secondary btn-sm" id="export-gifts"><i data-lucide="download"></i> Export CSV</button></div>
@@ -7285,9 +7287,9 @@ async function renderGifting(container) {
     $('#add-gift-btn').onclick = () => {
       openModal('Add Gift / Comp', `
         <div class="form-group"><label class="form-label">Influencer</label>
-          <select class="form-select" id="gift-influencer">${influencers.map(i => `<option value="${i.id}">${i.name} (@${i.handle || ''})</option>`).join('')}</select></div>
-        <div class="form-group"><label class="form-label">Restaurant</label>
-          <select class="form-select" id="gift-restaurant"><option value="">— None —</option>${restaurants.map(r => `<option value="${r.id}">${r.name}</option>`).join('')}</select></div>
+          <select class="form-select" id="gift-influencer"><option value="">— Select —</option>${influencers.map(i => `<option value="${i.id}">${i.name} (@${i.handle || ''})</option>`).join('')}</select></div>
+        <div class="form-group"><label class="form-label">Brand / Restaurant</label>
+          <select class="form-select" id="gift-restaurant"><option value="">— Select Brand —</option>${restaurants.map(r => `<option value="${r.id}">${r.name}</option>`).join('')}</select></div>
         <div class="form-row"><div class="form-group"><label class="form-label">Type</label>
           <select class="form-select" id="gift-type"><option value="meal">Meal</option><option value="gift_card">Gift Card</option><option value="product">Product</option><option value="experience">Experience</option></select></div>
         <div class="form-group"><label class="form-label">Value ($)</label><input class="form-input" id="gift-value" type="number" step="0.01" placeholder="0.00"></div></div>
@@ -7299,13 +7301,16 @@ async function renderGifting(container) {
       $('#save-gift-btn').onclick = async () => {
         const influencer_id = parseInt($('#gift-influencer').value);
         if (!influencer_id) return toast('Select an influencer', 'error');
-        await sb.from('influencer_gifts').insert({
-          influencer_id, restaurant_id: $('#gift-restaurant').value || null,
-          type: $('#gift-type').value, value: parseFloat($('#gift-value').value) || 0,
-          description: $('#gift-desc').value.trim(), sent_date: $('#gift-sent').value || null,
-          follow_up_date: $('#gift-followup').value || null, notes: $('#gift-notes').value.trim(),
+        const row = {
+          influencer_id, type: $('#gift-type').value, value: parseFloat($('#gift-value').value) || 0,
+          description: $('#gift-desc').value.trim(), notes: $('#gift-notes').value.trim(),
           status: $('#gift-sent').value ? 'sent' : 'pending', created_by: currentUser.id,
-        });
+        };
+        if ($('#gift-restaurant').value) row.restaurant_id = $('#gift-restaurant').value;
+        if ($('#gift-sent').value) row.sent_date = $('#gift-sent').value;
+        if ($('#gift-followup').value) row.follow_up_date = $('#gift-followup').value;
+        const { error } = await sb.from('influencer_gifts').insert(row);
+        if (error) { console.error('Gift insert error:', error); return toast('Failed: ' + error.message, 'error'); }
         closeModal(); toast('Gift added', 'success');
         await logActivity('add_gift', `Added gift for influencer #${influencer_id}`);
         navigate('gifting');
@@ -7405,11 +7410,13 @@ async function renderEvents(container) {
       tc.innerHTML = upcoming.length ? `<div class="review-grid">${upcoming.map(ev => {
         const evInv = getInvites(ev.id);
         const confirmed = evInv.filter(i => i.status === 'confirmed' || i.status === 'attended').length;
+        const evRest = restaurants.find(r => r.id === ev.restaurant_id);
         return `<div class="review-card">
           <div style="display:flex;justify-content:space-between;align-items:center">
             <h4 style="margin:0">${ev.name}</h4>
             <span class="badge badge-${ev.type === 'tasting' ? 'info' : ev.type === 'launch' ? 'success' : 'warning'}">${ev.type}</span>
           </div>
+          ${evRest ? `<div style="font-size:12px;color:var(--accent);margin-top:4px"><i data-lucide="store" style="width:12px;height:12px"></i> ${evRest.name}</div>` : ''}
           <div style="display:flex;gap:16px;margin:10px 0;font-size:13px;color:var(--text-secondary)">
             <span><i data-lucide="calendar" style="width:14px;height:14px"></i> ${ev.date}${ev.time ? ' at ' + ev.time : ''}</span>
             ${ev.location ? `<span><i data-lucide="map-pin" style="width:14px;height:14px"></i> ${ev.location}</span>` : ''}
@@ -7467,21 +7474,24 @@ async function renderEvents(container) {
         <div class="form-group"><label class="form-label">Date</label><input class="form-input" id="ev-date" type="date"></div></div>
         <div class="form-row"><div class="form-group"><label class="form-label">Time</label><input class="form-input" id="ev-time" type="time"></div>
         <div class="form-group"><label class="form-label">Capacity</label><input class="form-input" id="ev-capacity" type="number" placeholder="0"></div></div>
-        <div class="form-group"><label class="form-label">Restaurant</label>
-          <select class="form-select" id="ev-restaurant"><option value="">— None —</option>${restaurants.map(r => `<option value="${r.id}">${r.name}</option>`).join('')}</select></div>
-        <div class="form-group"><label class="form-label">Location</label><input class="form-input" id="ev-location" placeholder="Address or venue name"></div>
+        <div class="form-group"><label class="form-label">Brand / Restaurant</label>
+          <select class="form-select" id="ev-restaurant"><option value="">— Select Brand —</option>${restaurants.map(r => `<option value="${r.id}">${r.name}</option>`).join('')}</select></div>
+        <div class="form-group"><label class="form-label">Location / Address</label><input class="form-input" id="ev-location" placeholder="Address or venue name"></div>
         <div class="form-group"><label class="form-label">Description</label><textarea class="form-textarea" id="ev-desc" rows="2"></textarea></div>
       `, `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button><button class="btn btn-primary" id="save-event-btn">Create Event</button>`);
       $('#save-event-btn').onclick = async () => {
         const name = $('#ev-name').value.trim();
         const date = $('#ev-date').value;
         if (!name || !date) return toast('Name and date are required', 'error');
-        await sb.from('events').insert({
-          name, type: $('#ev-type').value, date, time: $('#ev-time').value || null,
-          restaurant_id: $('#ev-restaurant').value || null, location: $('#ev-location').value.trim(),
+        const row = {
+          name, type: $('#ev-type').value, date, location: $('#ev-location').value.trim(),
           description: $('#ev-desc').value.trim(), capacity: parseInt($('#ev-capacity').value) || 0,
           status: 'published', created_by: currentUser.id,
-        });
+        };
+        if ($('#ev-time').value) row.time = $('#ev-time').value;
+        if ($('#ev-restaurant').value) row.restaurant_id = $('#ev-restaurant').value;
+        const { error } = await sb.from('events').insert(row);
+        if (error) { console.error('Event insert error:', error); return toast('Failed: ' + error.message, 'error'); }
         closeModal(); toast('Event created', 'success');
         await logActivity('create_event', `Created event: ${name}`);
         navigate('events');
