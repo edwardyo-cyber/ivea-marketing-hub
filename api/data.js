@@ -56,6 +56,8 @@ const SCOPED_TABLES = [
   'influencer_promo_codes', 'influencer_ambassador_tiers',
   'influencer_milestones', 'influencer_referrals',
   'outreach_templates', 'outreach_log',
+  // Gifting, Events, Hashtags
+  'influencer_gifts', 'events', 'event_invites', 'hashtags', 'ugc_posts',
 ];
 
 // Tables that are global (no restaurant_id)
