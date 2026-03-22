@@ -6,6 +6,9 @@
 const SUPABASE_URL = 'https://zmdubmumgdyuyjajjxjs.supabase.co';
 const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InptZHVibXVtZ2R5dXlqYWpqeGpzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzMxMTIxMjQsImV4cCI6MjA4ODY4ODEyNH0.91FozXtednnxnKMTPJVNeOr1is4-du9dofPu4NuR2QE';
 let OPENAI_KEY = ''; // Loaded from Supabase settings at runtime
+const MANUS_API_KEY = 'sk-95B0KGqdc-JXTgn-QC4kMbY4lo0CRru78PMnbyoLyoOQlfcfZEXWJU68JRgmGuHW4oTdN1fPtOtbTDyQ9IwPE5aKO-Vj';
+const AI_BASE_URL = 'https://api.aimlapi.com';
+const AI_MODEL = 'gpt-4o-mini';
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
 // Install API middleware proxy — all sb.from() calls now route through /api/data
@@ -3569,10 +3572,10 @@ function openMediaEmailCompose(selectedContacts) {
     btn.disabled = true; btn.textContent = 'Drafting...';
     try {
       const prompt = `Write a professional media outreach email for Hermes Media Restaurant Group. Subject: ${subject}. This is going to ${selectedContacts.length} media contacts in the DMV area (DC, Maryland, Virginia). Keep it concise, professional, and compelling. Include a clear call-to-action. Only return the email body, no subject line.`;
-      const resp = await fetch('https://api.openai.com/v1/chat/completions', {
+      const resp = await fetch(`${MANUS_API_KEY ? AI_BASE_URL : 'https://api.openai.com'}/v1/chat/completions`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${OPENAI_KEY}` },
-        body: JSON.stringify({ model: 'gpt-4o-mini', messages: [{ role: 'user', content: prompt }], max_tokens: 600 })
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${MANUS_API_KEY || OPENAI_KEY}` },
+        body: JSON.stringify({ model: AI_MODEL, messages: [{ role: 'user', content: prompt }], max_tokens: 600 })
       });
       const data = await resp.json();
       $('#media-email-body').value = data.choices?.[0]?.message?.content || '';
@@ -5143,13 +5146,15 @@ function renderNotifications() {
 // GLOBAL: AI Content Generation Helper
 // ============================================
 async function generateAIContent(prompt, maxTokens = 500) {
-  if (!OPENAI_KEY) { toast('OpenAI key not configured. Go to Settings → API Keys.', 'error'); return null; }
+  const apiKey = MANUS_API_KEY || OPENAI_KEY;
+  const baseUrl = MANUS_API_KEY ? AI_BASE_URL : 'https://api.openai.com';
+  if (!apiKey) { toast('AI key not configured.', 'error'); return null; }
   try {
-    const res = await fetch('https://api.openai.com/v1/chat/completions', {
+    const res = await fetch(`${baseUrl}/v1/chat/completions`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${OPENAI_KEY}` },
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
       body: JSON.stringify({
-        model: 'gpt-4o-mini',
+        model: AI_MODEL,
         messages: [
           { role: 'system', content: 'You are a marketing expert for Hermes Media, a restaurant group managing 35 brands and 90+ locations in the DMV (DC, Maryland, Virginia) area. Generate professional, engaging marketing content. Be concise and creative.' },
           { role: 'user', content: prompt }
@@ -5306,8 +5311,8 @@ async function generatePageSuggestions() {
   `;
   if (window.lucide) lucide.createIcons();
 
-  if (!OPENAI_KEY) {
-    aiMessages = [{ role: 'assistant', content: '⚠️ OpenAI API key not configured. Go to **Settings → Integrations** and add your OpenAI key to enable AI suggestions.' }];
+  if (!MANUS_API_KEY && !OPENAI_KEY) {
+    aiMessages = [{ role: 'assistant', content: '⚠️ AI API key not configured. Go to **Settings → Integrations** and add your API key to enable AI suggestions.' }];
     renderAIMessages();
     return;
   }
@@ -5325,11 +5330,11 @@ ${pageCtx.prompt}
 ${pageData ? 'Here is current data from this page:\n' + pageData + '\n\n' : ''}Respond with 3-5 specific, actionable suggestions. Format each as a short bold title followed by 1-2 sentences. Use markdown formatting. Be concise — no fluff. Tailor every suggestion to the restaurant/food industry.`;
 
   try {
-    const res = await fetch('https://api.openai.com/v1/chat/completions', {
+    const res = await fetch(`${MANUS_API_KEY ? AI_BASE_URL : 'https://api.openai.com'}/v1/chat/completions`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${OPENAI_KEY}` },
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${MANUS_API_KEY || OPENAI_KEY}` },
       body: JSON.stringify({
-        model: 'gpt-4o-mini',
+        model: AI_MODEL,
         messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: `Give me smart suggestions for the ${pageCtx.label} page right now.` }],
         max_tokens: 600,
       }),
@@ -5340,7 +5345,7 @@ ${pageData ? 'Here is current data from this page:\n' + pageData + '\n\n' : ''}R
       { role: 'assistant', content: reply }
     ];
   } catch (err) {
-    aiMessages = [{ role: 'assistant', content: 'Could not connect to AI service. Check your OpenAI API key in Settings.' }];
+    aiMessages = [{ role: 'assistant', content: 'Could not connect to AI service.' }];
   }
   renderAIMessages();
 }
@@ -5417,11 +5422,11 @@ async function sendAIMessage() {
   const systemPrompt = `You are an AI marketing assistant for Hermes iMedia, a restaurant group with 35 brands and 90+ locations in the DMV area. Current user: ${currentUser.name} (${currentUser.role}). Current page: ${pageCtx.label}. ${pageCtx.prompt} Be concise and actionable. Use markdown formatting.`;
 
   try {
-    const res = await fetch('https://api.openai.com/v1/chat/completions', {
+    const res = await fetch(`${MANUS_API_KEY ? AI_BASE_URL : 'https://api.openai.com'}/v1/chat/completions`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${OPENAI_KEY}` },
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${MANUS_API_KEY || OPENAI_KEY}` },
       body: JSON.stringify({
-        model: 'gpt-4o-mini',
+        model: AI_MODEL,
         messages: [
           { role: 'system', content: systemPrompt },
           ...aiMessages.slice(-10).map(m => ({ role: m.role, content: m.content })),
