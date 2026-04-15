@@ -240,7 +240,6 @@ const NAV_ITEMS = [
   ]},
   { section: 'Outreach', items: [
     { id: 'influencers', icon: 'users', label: 'Influencers' },
-    { id: 'gifting', icon: 'gift', label: 'Gifting & Comps' },
     { id: 'events', icon: 'calendar-check', label: 'Events & Tastings' },
     { id: 'campaigns', icon: 'megaphone', label: 'Campaigns' },
     { id: 'media', icon: 'newspaper', label: 'Local Media' },
@@ -260,7 +259,6 @@ const NAV_ITEMS = [
   { section: 'Analytics', items: [
     { id: 'reports', icon: 'bar-chart-3', label: 'Reports' },
     { id: 'social-accounts', icon: 'share-2', label: 'Social Accounts' },
-    { id: 'hashtags', icon: 'hash', label: 'Hashtag Tracker' },
   ]},
   { section: 'Management', items: [
     { id: 'team', icon: 'user-cog', label: 'Team' },
@@ -356,9 +354,7 @@ function navigate(page) {
     'loyalty': renderLoyalty,
     'reports': renderReports,
     'social-accounts': renderSocialAccounts,
-    'gifting': renderGifting,
     'events': renderEvents,
-    'hashtags': renderHashtags,
     'team': renderTeam,
     'audit-log': renderAuditLog,
     'settings': renderSettings,
@@ -3057,7 +3053,6 @@ window.editInfluencer = async function(id) {
     </div>
     <div class="form-row">
       <div class="form-group"><label class="form-label">Followers</label><input class="form-input" type="number" id="inf-followers" value="${inf.followers || ''}"></div>
-      <div class="form-group"><label class="form-label">Engagement Rate (%)</label><input class="form-input" type="number" step="0.1" id="inf-engagement" value="${inf.engagement_rate || ''}"></div>
     </div>
     <div class="form-row">
       <div class="form-group"><label class="form-label">Base Rate ($)</label><input class="form-input" type="number" id="inf-rate" value="${inf.rate || ''}"></div>
@@ -3118,7 +3113,6 @@ window.editInfluencer = async function(id) {
       platform: $('#inf-platform').value,
       pipeline_stage: $('#inf-stage').value,
       followers: parseInt($('#inf-followers').value) || null,
-      engagement_rate: parseFloat($('#inf-engagement').value) || null,
       rate: parseFloat($('#inf-rate').value) || null,
       category: $('#inf-category').value,
       email: $('#inf-email').value,
@@ -7181,200 +7175,6 @@ function renderLoy_Analytics(container, { promos, members, redemptions }) {
 }
 
 // ============================================
-// PAGE: Gifting & Comps
-// ============================================
-async function renderGifting(container) {
-  await getEmployees();
-  const [giftsRes,InflRes, restRes] = await Promise.all([
-    sb.from('influencer_gifts').select('*').order('created_at', { ascending: false }),
-    sb.from('influencers').select('id, name, handle'),
-    sb.from('restaurants').select('id, name'),
-  ]);
-  const gifts = giftsRes.data || [];
-  const influencers =InflRes.data || [];
-  const restaurants = restRes.data || [];
-  const infMap = {}; influencers.forEach(i => infMap[i.id] = i);
-
-  let activeTab = 'active';
-
-  function render() {
-    const active = gifts.filter(g => g.status !== 'posted');
-    const history = gifts.filter(g => g.status === 'posted');
-    const pendingFollowUps = active.filter(g => g.follow_up_date && !g.follow_up_done && new Date(g.follow_up_date) <= new Date());
-    const totalValue = gifts.reduce((s, g) => s + parseFloat(g.value || 0), 0);
-    const posted = gifts.filter(g => g.status === 'posted').length;
-    const convRate = gifts.length ? Math.round((posted / gifts.length) * 100) : 0;
-
-    // Monthly spend for budget chart
-    const monthlySpend = {};
-    gifts.forEach(g => {
-      if (!g.sent_date) return;
-      const m = g.sent_date.substring(0, 7);
-      monthlySpend[m] = (monthlySpend[m] || 0) + parseFloat(g.value || 0);
-    });
-    const sortedMonths = Object.keys(monthlySpend).sort();
-
-    container.innerHTML = `
-      <h1 class="page-title">Gifting & Comps</h1>
-      <p class="page-subtitle">Track influencer gifts, comps, and ROI</p>
-      <div class="kpi-grid">
-        <div class="kpi-card"><div class="kpi-label">Total Gifted Value</div><div class="kpi-value">$${totalValue.toLocaleString()}</div></div>
-        <div class="kpi-card"><div class="kpi-label">Pending Follow-Ups</div><div class="kpi-value" style="color:${pendingFollowUps.length ? 'var(--danger)' : 'var(--success)'}">${pendingFollowUps.length}</div></div>
-        <div class="kpi-card"><div class="kpi-label">Conversion Rate</div><div class="kpi-value">${convRate}%</div></div>
-        <div class="kpi-card"><div class="kpi-label">Active Gifts</div><div class="kpi-value" style="color:var(--accent)">${active.length}</div></div>
-      </div>
-      <div class="tab-bar">
-        <button class="tab-btn ${activeTab==='active'?'active':''}" data-tab="active">Active Gifts</button>
-        <button class="tab-btn ${activeTab==='history'?'active':''}" data-tab="history">History</button>
-        <button class="tab-btn ${activeTab==='budget'?'active':''}" data-tab="budget">Budget Overview</button>
-        <div style="margin-left:auto"><button class="btn btn-primary btn-sm" id="add-gift-btn"><i data-lucide="plus"></i> Add Gift</button></div>
-      </div>
-      <div id="gifting-tab-content"></div>
-    `;
-    lucide.createIcons({ nameAttr: 'data-lucide' });
-    $$('.tab-btn').forEach(b => b.onclick = () => { activeTab = b.dataset.tab; render(); });
-
-    const tc = $('#gifting-tab-content');
-    if (activeTab === 'active') {
-      tc.innerHTML = `<div class="table-container"><table class="data-table"><thead><tr>
-        <th>Influencer</th><th>Brand</th><th>Type</th><th>Description</th><th>Value</th><th>Sent</th><th>Status</th><th>Follow-Up</th><th>Actions</th>
-      </tr></thead><tbody>
-        ${active.map(g => {
-          const inf = infMap[g.influencer_id];
-          const rest = restaurants.find(r => r.id === g.restaurant_id);
-          const overdue = g.follow_up_date && !g.follow_up_done && new Date(g.follow_up_date) <= new Date();
-          return `<tr>
-            <td>${inf ? inf.name : '#' + g.influencer_id}</td>
-            <td>${rest ? rest.name : '—'}</td>
-            <td><span class="badge">${g.type}</span></td>
-            <td>${g.description || ''}</td>
-            <td>$${parseFloat(g.value||0).toFixed(2)}</td>
-            <td>${g.sent_date || '—'}</td>
-            <td><span class="badge badge-${g.status === 'received' ? 'success' : g.status === 'sent' ? 'info' : 'warning'}">${g.status}</span></td>
-            <td style="${overdue ? 'color:var(--danger);font-weight:600' : ''}">${g.follow_up_date || '—'} ${g.follow_up_done ? '✓' : ''}</td>
-            <td><button class="btn btn-xs btn-secondary" onclick="editGift(${g.id})"><i data-lucide="edit" style="width:14px;height:14px"></i></button>
-            <button class="btn btn-xs btn-danger" onclick="deleteGift(${g.id})"><i data-lucide="trash-2" style="width:14px;height:14px"></i></button></td>
-          </tr>`;
-        }).join('')}
-        ${!active.length ? '<tr><td colspan="9" class="text-center">No active gifts</td></tr>' : ''}
-      </tbody></table></div>`;
-    } else if (activeTab === 'history') {
-      tc.innerHTML = `<div style="margin-bottom:12px;text-align:right"><button class="btn btn-secondary btn-sm" id="export-gifts"><i data-lucide="download"></i> Export CSV</button></div>
-      <div class="table-container"><table class="data-table"><thead><tr>
-        <th>Influencer</th><th>Type</th><th>Value</th><th>Sent</th><th>Status</th><th>Notes</th>
-      </tr></thead><tbody>
-        ${history.map(g => { const inf = infMap[g.influencer_id]; return `<tr>
-          <td>${inf ? inf.name : '#' + g.influencer_id}</td><td>${g.type}</td><td>$${parseFloat(g.value||0).toFixed(2)}</td>
-          <td>${g.sent_date || '—'}</td><td><span class="badge">${g.status}</span></td><td>${g.notes || ''}</td></tr>`; }).join('')}
-        ${!history.length ? '<tr><td colspan="6" class="text-center">No history</td></tr>' : ''}
-      </tbody></table></div>`;
-      lucide.createIcons({ nameAttr: 'data-lucide' });
-      const expBtn = $('#export-gifts');
-      if (expBtn) expBtn.onclick = () => csvExport(history, 'gifting-history');
-    } else if (activeTab === 'budget') {
-      tc.innerHTML = `<div class="kpi-grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:20px">
-        <div class="kpi-card"><div class="kpi-label">This Month</div><div class="kpi-value">$${(monthlySpend[new Date().toISOString().slice(0,7)] || 0).toFixed(0)}</div></div>
-        <div class="kpi-card"><div class="kpi-label">Last Month</div><div class="kpi-value">$${(monthlySpend[new Date(Date.now()-30*86400000).toISOString().slice(0,7)] || 0).toFixed(0)}</div></div>
-        <div class="kpi-card"><div class="kpi-label">Avg Monthly</div><div class="kpi-value">$${sortedMonths.length ? (Object.values(monthlySpend).reduce((a,b)=>a+b,0)/sortedMonths.length).toFixed(0) : '0'}</div></div>
-        <div class="kpi-card"><div class="kpi-label">Year Total</div><div class="kpi-value">$${totalValue.toFixed(0)}</div></div>
-      </div>
-      <div class="kpi-card" style="padding:20px"><canvas id="gift-budget-chart" height="200"></canvas></div>`;
-      if (sortedMonths.length) {
-        new Chart($('#gift-budget-chart'), { type: 'bar', data: {
-          labels: sortedMonths, datasets: [{ label: 'Monthly Spend ($)', data: sortedMonths.map(m => monthlySpend[m]),
-          backgroundColor: 'rgba(99,102,241,0.6)', borderRadius: 4 }]
-        }, options: { responsive: true, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true } } } });
-      }
-    }
-    lucide.createIcons({ nameAttr: 'data-lucide' });
-
-    // Add Gift modal
-    $('#add-gift-btn').onclick = () => {
-      openModal('Add Gift / Comp', `
-        <div class="form-group"><label class="form-label">Influencer</label>
-          <select class="form-select" id="gift-influencer"><option value="">— Select —</option>${influencers.map(i => `<option value="${i.id}">${i.name} (@${i.handle || ''})</option>`).join('')}</select></div>
-        <div class="form-row">
-          <div class="form-group"><label class="form-label">Brand</label>
-            <select class="form-select" id="gift-brand"><option value="">— Select Brand —</option>${restaurants.map(r => `<option value="${r.id}">${r.name}</option>`).join('')}</select></div>
-          <div class="form-group"><label class="form-label">Location</label>
-            <select class="form-select" id="gift-location" disabled><option value="">— Select Brand first —</option></select></div>
-        </div>
-        <div class="form-row"><div class="form-group"><label class="form-label">Type</label>
-          <select class="form-select" id="gift-type"><option value="meal">Meal</option><option value="gift_card">Gift Card</option><option value="product">Product</option><option value="experience">Experience</option></select></div>
-        <div class="form-group"><label class="form-label">Value ($)</label><input class="form-input" id="gift-value" type="number" step="0.01" placeholder="0.00"></div></div>
-        <div class="form-group"><label class="form-label">Description</label><input class="form-input" id="gift-desc" placeholder="e.g. Dinner for 2"></div>
-        <div class="form-row"><div class="form-group"><label class="form-label">Sent Date</label><input class="form-input" id="gift-sent" type="date"></div>
-        <div class="form-group"><label class="form-label">Follow-Up Date</label><input class="form-input" id="gift-followup" type="date"></div></div>
-        <div class="form-group"><label class="form-label">Notes</label><textarea class="form-textarea" id="gift-notes" rows="2"></textarea></div>
-      `, `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button><button class="btn btn-primary" id="save-gift-btn">Save Gift</button>`);
-
-      // Cascade: brand → location
-      $('#gift-brand').onchange = async () => {
-        const brandId = $('#gift-brand').value;
-        const locSel = $('#gift-location');
-        if (!brandId) { locSel.innerHTML = '<option value="">— Select Brand first —</option>'; locSel.disabled = true; return; }
-        const locs = await getRestaurantLocations(brandId);
-        locSel.innerHTML = '<option value="">— All Locations —</option>' + locs.map((l, i) => `<option value="${i}">${l.name || l.address || 'Location ' + (i+1)}</option>`).join('');
-        locSel.disabled = false;
-      };
-
-      $('#save-gift-btn').onclick = async () => {
-        const influencer_id = parseInt($('#gift-influencer').value);
-        if (!influencer_id) return toast('Select an influencer', 'error');
-        const row = {
-          influencer_id, type: $('#gift-type').value, value: parseFloat($('#gift-value').value) || 0,
-          description: $('#gift-desc').value.trim(), notes: $('#gift-notes').value.trim(),
-          status: $('#gift-sent').value ? 'sent' : 'pending',
-        };
-        if ($('#gift-brand').value) row.restaurant_id = $('#gift-brand').value;
-        if ($('#gift-sent').value) row.sent_date = $('#gift-sent').value;
-        if ($('#gift-followup').value) row.follow_up_date = $('#gift-followup').value;
-        const { error } = await sb.from('influencer_gifts').insert(row);
-        if (error) { console.error('Gift insert error:', error); return toast('Failed: ' + error.message, 'error'); }
-        closeModal(); toast('Gift added', 'success');
-        await logActivity('add_gift', `Added gift for influencer #${influencer_id}`);
-        navigate('gifting');
-      };
-    };
-  }
-
-  function daysDiff(dateStr) { return Math.floor((Date.now() - new Date(dateStr).getTime()) / 86400000); }
-  render();
-}
-
-window.editGift = async function(id) {
-  const { data: g } = await sb.from('influencer_gifts').select('*').eq('id', id).single();
-  if (!g) return toast('Gift not found', 'error');
-  openModal('Edit Gift', `
-    <div class="form-row"><div class="form-group"><label class="form-label">Type</label>
-      <select class="form-select" id="eg-type"><option value="meal" ${g.type==='meal'?'selected':''}>Meal</option><option value="gift_card" ${g.type==='gift_card'?'selected':''}>Gift Card</option><option value="product" ${g.type==='product'?'selected':''}>Product</option><option value="experience" ${g.type==='experience'?'selected':''}>Experience</option></select></div>
-    <div class="form-group"><label class="form-label">Value ($)</label><input class="form-input" id="eg-value" type="number" step="0.01" value="${g.value||''}"></div></div>
-    <div class="form-group"><label class="form-label">Description</label><input class="form-input" id="eg-desc" value="${g.description||''}"></div>
-    <div class="form-group"><label class="form-label">Status</label>
-      <select class="form-select" id="eg-status"><option value="pending" ${g.status==='pending'?'selected':''}>Pending</option><option value="sent" ${g.status==='sent'?'selected':''}>Sent</option><option value="received" ${g.status==='received'?'selected':''}>Received</option><option value="posted" ${g.status==='posted'?'selected':''}>Posted</option></select></div>
-    <div class="form-row"><div class="form-group"><label class="form-label">Sent Date</label><input class="form-input" id="eg-sent" type="date" value="${g.sent_date||''}"></div>
-    <div class="form-group"><label class="form-label">Follow-Up Date</label><input class="form-input" id="eg-followup" type="date" value="${g.follow_up_date||''}"></div></div>
-    <div class="form-group"><label><input type="checkbox" id="eg-fudone" ${g.follow_up_done?'checked':''}> Follow-up completed</label></div>
-    <div class="form-group"><label class="form-label">Notes</label><textarea class="form-textarea" id="eg-notes" rows="2">${g.notes||''}</textarea></div>
-  `, `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button><button class="btn btn-primary" id="save-eg-btn">Update</button>`);
-  $('#save-eg-btn').onclick = async () => {
-    await sb.from('influencer_gifts').update({
-      type: $('#eg-type').value, value: parseFloat($('#eg-value').value) || 0,
-      description: $('#eg-desc').value.trim(), status: $('#eg-status').value,
-      sent_date: $('#eg-sent').value || null, follow_up_date: $('#eg-followup').value || null,
-      follow_up_done: $('#eg-fudone').checked, notes: $('#eg-notes').value.trim(),
-      updated_at: new Date().toISOString(),
-    }).eq('id', id);
-    closeModal(); toast('Gift updated', 'success'); navigate('gifting');
-  };
-};
-
-window.deleteGift = async function(id) {
-  if (!confirm('Delete this gift record?')) return;
-  await sb.from('influencer_gifts').delete().eq('id', id);
-  toast('Gift deleted', 'success'); navigate('gifting');
-};
-
 // ============================================
 // PAGE: Events & Tastings
 // ============================================
@@ -7614,200 +7414,6 @@ window.deleteInvite = async function(id) {
   if (!confirm('Remove this invite?')) return;
   await sb.from('event_invites').delete().eq('id', id);
   toast('Invite removed', 'success'); navigate('events');
-};
-
-// ============================================
-// PAGE: Hashtag Tracker
-// ============================================
-async function renderHashtags(container) {
-  const [hashRes, ugcRes, restRes] = await Promise.all([
-    sb.from('hashtags').select('*').order('created_at', { ascending: false }),
-    sb.from('ugc_posts').select('*').order('spotted_date', { ascending: false }),
-    sb.from('restaurants').select('id, name'),
-  ]);
-  const hashtags = hashRes.data || [];
-  const ugcPosts = ugcRes.data || [];
-  const restaurants = restRes.data || [];
-  const hashMap = {}; hashtags.forEach(h => hashMap[h.id] = h);
-
-  let activeTab = 'branded';
-
-  function render() {
-    const branded = hashtags.filter(h => h.is_branded);
-    const trending = hashtags.filter(h => !h.is_branded);
-    const totalPosts = branded.reduce((s, h) => s + (h.total_posts || 0), 0);
-    const totalReach = branded.reduce((s, h) => s + parseInt(h.total_reach || 0), 0);
-    const topHash = branded.sort((a, b) => (b.total_posts || 0) - (a.total_posts || 0))[0];
-    const thisMonthUGC = ugcPosts.filter(p => p.spotted_date && p.spotted_date.substring(0,7) === new Date().toISOString().slice(0,7)).length;
-    const avgReach = ugcPosts.length ? Math.round(ugcPosts.reduce((s, p) => s + parseInt(p.reach || 0), 0) / ugcPosts.length) : 0;
-
-    container.innerHTML = `
-      <h1 class="page-title">Hashtag Tracker</h1>
-      <p class="page-subtitle">Track branded hashtags, trends, and user-generated content</p>
-      <div class="kpi-grid">
-        <div class="kpi-card"><div class="kpi-label">Branded Hashtags</div><div class="kpi-value" style="color:var(--accent)">${branded.length}</div></div>
-        <div class="kpi-card"><div class="kpi-label">Total Posts</div><div class="kpi-value">${totalPosts.toLocaleString()}</div></div>
-        <div class="kpi-card"><div class="kpi-label">Top Hashtag</div><div class="kpi-value" style="font-size:18px">${topHash ? '#' + topHash.hashtag : '—'}</div></div>
-        <div class="kpi-card"><div class="kpi-label">Total Reach</div><div class="kpi-value">${totalReach.toLocaleString()}</div></div>
-      </div>
-      <div class="tab-bar">
-        <button class="tab-btn ${activeTab==='branded'?'active':''}" data-tab="branded">Branded</button>
-        <button class="tab-btn ${activeTab==='trending'?'active':''}" data-tab="trending">Trending</button>
-        <button class="tab-btn ${activeTab==='ugc'?'active':''}" data-tab="ugc">UGC Feed</button>
-        <div style="margin-left:auto"><button class="btn btn-primary btn-sm" id="add-hashtag-btn"><i data-lucide="plus"></i> Add Hashtag</button></div>
-      </div>
-      <div id="hashtag-tab-content"></div>
-    `;
-    lucide.createIcons({ nameAttr: 'data-lucide' });
-    $$('.tab-btn').forEach(b => b.onclick = () => { activeTab = b.dataset.tab; render(); });
-
-    const tc = $('#hashtag-tab-content');
-    if (activeTab === 'branded') {
-      tc.innerHTML = `<div class="table-container"><table class="data-table"><thead><tr>
-        <th>Hashtag</th><th>Platform</th><th>Total Posts</th><th>Total Reach</th><th>Last Seen</th><th>Notes</th><th>Actions</th>
-      </tr></thead><tbody>
-        ${branded.map(h => `<tr>
-          <td style="font-weight:600;color:var(--accent)">#${h.hashtag}</td>
-          <td>${h.platform}</td><td>${(h.total_posts||0).toLocaleString()}</td><td>${parseInt(h.total_reach||0).toLocaleString()}</td>
-          <td>${h.last_seen || '—'}</td><td>${h.notes || ''}</td>
-          <td><button class="btn btn-xs btn-secondary" onclick="editHashtag(${h.id})"><i data-lucide="edit" style="width:14px;height:14px"></i></button>
-          <button class="btn btn-xs btn-danger" onclick="deleteHashtag(${h.id})"><i data-lucide="trash-2" style="width:14px;height:14px"></i></button></td>
-        </tr>`).join('')}
-        ${!branded.length ? '<tr><td colspan="7" class="text-center">No branded hashtags yet</td></tr>' : ''}
-      </tbody></table></div>`;
-    } else if (activeTab === 'trending') {
-      tc.innerHTML = `<div class="table-container"><table class="data-table"><thead><tr>
-        <th>Hashtag</th><th>Platform</th><th>Posts</th><th>Reach</th><th>Last Seen</th><th>Notes</th><th>Actions</th>
-      </tr></thead><tbody>
-        ${trending.map(h => `<tr>
-          <td>#${h.hashtag}</td><td>${h.platform}</td><td>${(h.total_posts||0).toLocaleString()}</td>
-          <td>${parseInt(h.total_reach||0).toLocaleString()}</td><td>${h.last_seen || '—'}</td><td>${h.notes || ''}</td>
-          <td><button class="btn btn-xs btn-secondary" onclick="editHashtag(${h.id})"><i data-lucide="edit" style="width:14px;height:14px"></i></button>
-          <button class="btn btn-xs btn-danger" onclick="deleteHashtag(${h.id})"><i data-lucide="trash-2" style="width:14px;height:14px"></i></button></td>
-        </tr>`).join('')}
-        ${!trending.length ? '<tr><td colspan="7" class="text-center">No trending hashtags tracked yet</td></tr>' : ''}
-      </tbody></table></div>`;
-    } else if (activeTab === 'ugc') {
-      tc.innerHTML = `
-        <div class="kpi-grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:16px">
-          <div class="kpi-card"><div class="kpi-label">Total UGC</div><div class="kpi-value">${ugcPosts.length}</div></div>
-          <div class="kpi-card"><div class="kpi-label">This Month</div><div class="kpi-value" style="color:var(--accent)">${thisMonthUGC}</div></div>
-          <div class="kpi-card"><div class="kpi-label">Avg Reach</div><div class="kpi-value">${avgReach.toLocaleString()}</div></div>
-          <div class="kpi-card"><div class="kpi-label">Platforms</div><div class="kpi-value">${[...new Set(ugcPosts.map(p=>p.platform).filter(Boolean))].length}</div></div>
-        </div>
-        <div style="margin-bottom:12px;text-align:right"><button class="btn btn-primary btn-sm" id="log-ugc-btn"><i data-lucide="plus"></i> Log UGC</button></div>
-        <div class="review-grid">
-          ${ugcPosts.map(p => {
-            const ht = hashMap[p.hashtag_id];
-            return `<div class="review-card">
-              <div style="display:flex;justify-content:space-between;align-items:center">
-                <span style="font-weight:600">@${p.author_handle || 'unknown'}</span>
-                <span class="badge">${p.platform || ''}</span>
-              </div>
-              ${ht ? `<div style="font-size:12px;color:var(--accent);margin:4px 0">#${ht.hashtag}</div>` : ''}
-              <p style="font-size:13px;color:var(--text-secondary);margin:6px 0">${p.caption ? p.caption.substring(0, 120) + (p.caption.length > 120 ? '...' : '') : ''}</p>
-              <div style="display:flex;justify-content:space-between;align-items:center;font-size:12px;color:var(--text-muted)">
-                <span>Reach: ${parseInt(p.reach||0).toLocaleString()} | Eng: ${parseInt(p.engagement||0).toLocaleString()}</span>
-                ${p.post_url ? `<a href="${p.post_url}" target="_blank" class="btn btn-xs btn-secondary">View Post</a>` : ''}
-              </div>
-              <div style="margin-top:6px;font-size:11px;color:var(--text-muted)">${p.spotted_date || ''}</div>
-            </div>`;
-          }).join('')}
-          ${!ugcPosts.length ? '<div class="empty-state"><p>No UGC posts logged yet</p></div>' : ''}
-        </div>
-      `;
-      lucide.createIcons({ nameAttr: 'data-lucide' });
-      const logBtn = $('#log-ugc-btn');
-      if (logBtn) logBtn.onclick = () => {
-        openModal('Log UGC Post', `
-          <div class="form-group"><label class="form-label">Hashtag</label>
-            <select class="form-select" id="ugc-hashtag"><option value="">— None —</option>${hashtags.map(h => `<option value="${h.id}">#${h.hashtag}</option>`).join('')}</select></div>
-          <div class="form-row"><div class="form-group"><label class="form-label">Platform</label>
-            <select class="form-select" id="ugc-platform"><option>instagram</option><option>tiktok</option><option>twitter</option><option>facebook</option><option>youtube</option></select></div>
-          <div class="form-group"><label class="form-label">Author Handle</label><input class="form-input" id="ugc-author" placeholder="@username"></div></div>
-          <div class="form-group"><label class="form-label">Post URL</label><input class="form-input" id="ugc-url" placeholder="https://..."></div>
-          <div class="form-group"><label class="form-label">Caption</label><textarea class="form-textarea" id="ugc-caption" rows="2"></textarea></div>
-          <div class="form-row"><div class="form-group"><label class="form-label">Reach</label><input class="form-input" id="ugc-reach" type="number" placeholder="0"></div>
-          <div class="form-group"><label class="form-label">Engagement</label><input class="form-input" id="ugc-engagement" type="number" placeholder="0"></div></div>
-          <div class="form-group"><label class="form-label">Restaurant</label>
-            <select class="form-select" id="ugc-restaurant"><option value="">— None —</option>${restaurants.map(r => `<option value="${r.id}">${r.name}</option>`).join('')}</select></div>
-        `, `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button><button class="btn btn-primary" id="save-ugc-btn">Save</button>`);
-        $('#save-ugc-btn').onclick = async () => {
-          await sb.from('ugc_posts').insert({
-            hashtag_id: parseInt($('#ugc-hashtag').value) || null,
-            platform: $('#ugc-platform').value, author_handle: $('#ugc-author').value.replace('@','').trim(),
-            post_url: $('#ugc-url').value.trim(), caption: $('#ugc-caption').value.trim(),
-            reach: parseInt($('#ugc-reach').value) || 0, engagement: parseInt($('#ugc-engagement').value) || 0,
-            restaurant_id: $('#ugc-restaurant').value || null,
-          });
-          closeModal(); toast('UGC post logged', 'success');
-          await logActivity('log_ugc', 'Logged a UGC post');
-          navigate('hashtags');
-        };
-      };
-    }
-    lucide.createIcons({ nameAttr: 'data-lucide' });
-
-    // Add Hashtag modal
-    $('#add-hashtag-btn').onclick = () => {
-      openModal('Add Hashtag', `
-        <div class="form-group"><label class="form-label">Hashtag (without #)</label><input class="form-input" id="ht-tag" placeholder="e.g. EatLocal"></div>
-        <div class="form-row"><div class="form-group"><label class="form-label">Platform</label>
-          <select class="form-select" id="ht-platform"><option>instagram</option><option>tiktok</option><option>twitter</option><option>facebook</option><option>youtube</option></select></div>
-        <div class="form-group"><label class="form-label">Type</label>
-          <select class="form-select" id="ht-branded"><option value="true">Branded</option><option value="false">Trending / General</option></select></div></div>
-        <div class="form-row"><div class="form-group"><label class="form-label">Total Posts</label><input class="form-input" id="ht-posts" type="number" placeholder="0"></div>
-        <div class="form-group"><label class="form-label">Total Reach</label><input class="form-input" id="ht-reach" type="number" placeholder="0"></div></div>
-        <div class="form-group"><label class="form-label">Restaurant</label>
-          <select class="form-select" id="ht-restaurant"><option value="">— None —</option>${restaurants.map(r => `<option value="${r.id}">${r.name}</option>`).join('')}</select></div>
-        <div class="form-group"><label class="form-label">Notes</label><textarea class="form-textarea" id="ht-notes" rows="2"></textarea></div>
-      `, `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button><button class="btn btn-primary" id="save-ht-btn">Save</button>`);
-      $('#save-ht-btn').onclick = async () => {
-        const hashtag = $('#ht-tag').value.trim().replace('#', '');
-        if (!hashtag) return toast('Enter a hashtag', 'error');
-        await sb.from('hashtags').insert({
-          hashtag, platform: $('#ht-platform').value, is_branded: $('#ht-branded').value === 'true',
-          total_posts: parseInt($('#ht-posts').value) || 0, total_reach: parseInt($('#ht-reach').value) || 0,
-          restaurant_id: $('#ht-restaurant').value || null, notes: $('#ht-notes').value.trim(),
-          last_seen: new Date().toISOString().slice(0, 10), created_by: currentUser.id,
-        });
-        closeModal(); toast('Hashtag added', 'success');
-        await logActivity('add_hashtag', `Added hashtag: #${hashtag}`);
-        navigate('hashtags');
-      };
-    };
-  }
-  render();
-}
-
-window.editHashtag = async function(id) {
-  const { data: h } = await sb.from('hashtags').select('*').eq('id', id).single();
-  if (!h) return toast('Hashtag not found', 'error');
-  openModal('Edit Hashtag', `
-    <div class="form-group"><label class="form-label">Hashtag</label><input class="form-input" id="eh-tag" value="${h.hashtag}"></div>
-    <div class="form-row"><div class="form-group"><label class="form-label">Platform</label>
-      <select class="form-select" id="eh-platform">${['instagram','tiktok','twitter','facebook','youtube'].map(p => `<option value="${p}" ${h.platform===p?'selected':''}>${p}</option>`).join('')}</select></div>
-    <div class="form-group"><label class="form-label">Branded</label>
-      <select class="form-select" id="eh-branded"><option value="true" ${h.is_branded?'selected':''}>Yes</option><option value="false" ${!h.is_branded?'selected':''}>No</option></select></div></div>
-    <div class="form-row"><div class="form-group"><label class="form-label">Total Posts</label><input class="form-input" id="eh-posts" type="number" value="${h.total_posts||0}"></div>
-    <div class="form-group"><label class="form-label">Total Reach</label><input class="form-input" id="eh-reach" type="number" value="${h.total_reach||0}"></div></div>
-    <div class="form-group"><label class="form-label">Notes</label><textarea class="form-textarea" id="eh-notes" rows="2">${h.notes||''}</textarea></div>
-  `, `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button><button class="btn btn-primary" id="save-eh-btn">Update</button>`);
-  $('#save-eh-btn').onclick = async () => {
-    await sb.from('hashtags').update({
-      hashtag: $('#eh-tag').value.trim().replace('#',''), platform: $('#eh-platform').value,
-      is_branded: $('#eh-branded').value === 'true', total_posts: parseInt($('#eh-posts').value) || 0,
-      total_reach: parseInt($('#eh-reach').value) || 0, notes: $('#eh-notes').value.trim(),
-      updated_at: new Date().toISOString(),
-    }).eq('id', id);
-    closeModal(); toast('Hashtag updated', 'success'); navigate('hashtags');
-  };
-};
-
-window.deleteHashtag = async function(id) {
-  if (!confirm('Delete this hashtag?')) return;
-  await sb.from('hashtags').delete().eq('id', id);
-  toast('Hashtag deleted', 'success'); navigate('hashtags');
 };
 
 // ============================================
