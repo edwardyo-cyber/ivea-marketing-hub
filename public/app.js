@@ -1300,7 +1300,6 @@ async function renderInfluencers(container) {
     { id: 'posts', icon: 'play-circle', label: 'Posts & Performance' },
     { id: 'payments', icon: 'credit-card', label: 'Payments' },
     { id: 'interactions', icon: 'message-circle', label: 'Interactions' },
-    { id: 'ambassador', icon: 'crown', label: 'Ambassador Program' },
   ];
 
   container.innerHTML = `
@@ -1326,15 +1325,48 @@ async function renderInfluencers(container) {
   else if (infActiveTab === 'posts') await renderInfPosts(tc);
   else if (infActiveTab === 'payments') await renderInfPayments(tc);
   else if (infActiveTab === 'interactions') await renderInfInteractions(tc);
-  else if (infActiveTab === 'ambassador') await renderInfAmbassador(tc);
 }
 
 // ---- TAB: Pipeline ----
 async function renderInfPipeline(container) {
-  const { data: influencers } = await sb.from('influencers').select('*').order('followers', { ascending: false });
-  const items = influencers || [];
-  const stages = ['lead', 'prospect', 'outreach', 'negotiation', 'contracted', 'completed'];
-  const stageColors = { lead: '#94a3b8', prospect: '#666', outreach: '#3b82f6', negotiation: '#f59e0b', contracted: '#22c55e', completed: '#8b5cf6' };
+  const [influencersRes, postsRes, tiersRes, paymentsRes] = await Promise.all([
+    sb.from('influencers').select('*').order('followers', { ascending: false }),
+    sb.from('influencer_posts').select('influencer_id,views,likes,comments,saves,reach'),
+    sb.from('influencer_ambassador_tiers').select('*').order('sort_order'),
+    sb.from('influencer_payments').select('amount,status'),
+  ]);
+  const items = influencersRes.data || [];
+  const posts = postsRes.data || [];
+  const tiers = tiersRes.data || [];
+  const totalPaid = (paymentsRes.data || []).filter(p => p.status === 'paid').reduce((s, p) => s + (parseFloat(p.amount) || 0), 0);
+
+  // Build collab count map, real engagement rate, and ambassador tier per influencer
+  const collabCounts = {};
+  const engagementTotals = {};
+  posts.forEach(p => {
+    collabCounts[p.influencer_id] = (collabCounts[p.influencer_id] || 0) + 1;
+    if (p.reach) {
+      const eng = ((p.likes || 0) + (p.comments || 0) + (p.saves || 0)) / p.reach * 100;
+      if (!engagementTotals[p.influencer_id]) engagementTotals[p.influencer_id] = { total: 0, count: 0 };
+      engagementTotals[p.influencer_id].total += eng;
+      engagementTotals[p.influencer_id].count += 1;
+    }
+  });
+  items.forEach(inf => {
+    const count = collabCounts[inf.id] || 0;
+    inf._ambassadorTier = [...tiers].reverse().find(t => count >= t.min_collabs) || null;
+    const e = engagementTotals[inf.id];
+    inf._realEngagement = e ? (e.total / e.count) : null;
+  });
+
+  // Average real engagement across influencers who have post data
+  const engItems = items.filter(i => i._realEngagement !== null);
+  const avgRealEngagement = engItems.length
+    ? (engItems.reduce((s, i) => s + i._realEngagement, 0) / engItems.length).toFixed(1)
+    : null;
+
+  const stages = ['prospect', 'outreach', 'negotiation', 'contracted', 'completed'];
+  const stageColors = { prospect: '#666', outreach: '#3b82f6', negotiation: '#f59e0b', contracted: '#22c55e', completed: '#8b5cf6' };
   let activeFilter = '';
   let selected = new Set();
 
@@ -1353,7 +1385,7 @@ async function renderInfPipeline(container) {
       <td><span style="color:${tierColor(tier)};font-weight:600">${tier}</span><div style="font-size:11px;color:var(--text-muted)">${i.followers?.toLocaleString() || '0'}</div></td>
       <td>${i.engagement_rate ? i.engagement_rate + '%' : '—'}</td>
       <td>${i.location || '—'}</td>
-      <td>${parseJSON(i.tags).map(t => `<span class="badge badge-accent" style="font-size:10px;margin:1px">${t}</span>`).join('') || badgeHTML(i.category || '—')}</td>
+      <td>${parseJSON(i.tags).map(t => `<span class="badge badge-accent" style="font-size:10px;margin:1px">${t}</span>`).join('') || badgeHTML(i.category || '—')}${i._ambassadorTier ? ' ' + ambassadorBadge(i._ambassadorTier.name) : ''}</td>
       <td>${i.email ? `<a href="mailto:${i.email}" style="color:var(--accent);text-decoration:none;font-size:12px">${i.email}</a>` : '—'}</td>
       <td>${i.rate ? '$' + Number(i.rate).toLocaleString() : '—'}</td>
       <td>${badgeHTML(i.pipeline_stage)}</td>
@@ -1374,11 +1406,37 @@ async function renderInfPipeline(container) {
     container.innerHTML = `
       <div class="kpi-grid" style="grid-template-columns:repeat(5,1fr);margin-bottom:16px">
         <div class="kpi-card"><div class="kpi-label">Total Influencers</div><div class="kpi-value">${items.length}</div></div>
-        <div class="kpi-card"><div class="kpi-label">Contracted</div><div class="kpi-value" style="color:var(--success)">${items.filter(i => i.pipeline_stage === 'contracted').length}</div></div>
-        <div class="kpi-card"><div class="kpi-label">In Negotiation</div><div class="kpi-value" style="color:var(--warning)">${items.filter(i => i.pipeline_stage === 'negotiation').length}</div></div>
-        <div class="kpi-card"><div class="kpi-label">Avg Engagement</div><div class="kpi-value">${items.length ? (items.reduce((s,i) => s + (parseFloat(i.engagement_rate) || 0), 0) / items.filter(i => i.engagement_rate).length || 0).toFixed(1) + '%' : '—'}</div></div>
+        <div class="kpi-card"><div class="kpi-label">Total Paid</div><div class="kpi-value" style="color:var(--success)">$${totalPaid.toLocaleString()}</div></div>
+        <div class="kpi-card" title="Calculated from actual post performance (likes + comments + saves) / reach across all influencer posts"><div class="kpi-label">Avg Engagement</div><div class="kpi-value">${avgRealEngagement !== null ? avgRealEngagement + '%' : '—'}</div><div style="font-size:10px;color:var(--text-muted);margin-top:2px">from post data</div></div>
         <div class="kpi-card"><div class="kpi-label">Total Reach</div><div class="kpi-value">${items.reduce((s,i) => s + (i.followers || 0), 0).toLocaleString()}</div></div>
       </div>
+      ${(() => {
+        const ranked = [...items]
+          .filter(i => i._ambassadorTier)
+          .map(i => {
+            const infPosts = posts.filter(p => p.influencer_id === i.id);
+            const totalViews = infPosts.reduce((s, p) => s + (p.views || 0), 0);
+            return { ...i, totalViews, postCount: infPosts.length };
+          })
+          .sort((a, b) => b.totalViews - a.totalViews)
+          .slice(0, 5);
+        if (!ranked.length) return '';
+        const medals = ['🥇', '🥈', '🥉', '4.', '5.'];
+        return `<div class="chart-card" style="margin-bottom:16px">
+          <h4 style="margin-bottom:12px;font-size:14px;font-weight:600">Ambassador Leaderboard</h4>
+          <div style="display:grid;grid-template-columns:repeat(${ranked.length},1fr);gap:12px">
+            ${ranked.map((inf, idx) => `
+              <div style="text-align:center;padding:12px;background:var(--bg);border-radius:8px;border:1px solid var(--border)">
+                <div style="font-size:22px;margin-bottom:4px">${medals[idx]}</div>
+                <div style="font-weight:600;font-size:13px">${inf.name}</div>
+                <div style="margin:6px 0">${ambassadorBadge(inf._ambassadorTier.name)}</div>
+                <div style="font-size:11px;color:var(--text-muted)">${inf.postCount} post${inf.postCount !== 1 ? 's' : ''}</div>
+                <div style="font-size:12px;font-weight:600;margin-top:4px">${inf.totalViews.toLocaleString()} views</div>
+              </div>
+            `).join('')}
+          </div>
+        </div>`;
+      })()}
       <div class="pipeline-grid">
         ${stageCounts().map(s => `
           <div class="pipeline-card ${activeFilter === s.stage ? 'active' : ''}" style="border-top-color:${stageColors[s.stage]}" data-stage="${s.stage}">
@@ -2040,100 +2098,6 @@ window.deleteInteraction = function(id) {
   });
 };
 
-// ---- TAB: Ambassador Program ----
-async function renderInfAmbassador(container) {
-  const [influencersRes, paymentsRes, postsRes, milestonesRes, tiersRes] = await Promise.all([
-    sb.from('influencers').select('*').order('followers', { ascending: false }),
-    sb.from('influencer_payments').select('*'),
-    sb.from('influencer_posts').select('*'),
-    sb.from('influencer_milestones').select('*'),
-    sb.from('influencer_ambassador_tiers').select('*').order('sort_order'),
-  ]);
-  const influencers = influencersRes.data || [];
-  const payments = paymentsRes.data || [];
-  const posts = postsRes.data || [];
-  const milestones = milestonesRes.data || [];
-  const tiers = tiersRes.data || [];
-
-  // Calculate stats per influencer
-  const infStats = influencers.map(inf => {
-    const infPosts = posts.filter(p => p.influencer_id === inf.id);
-    const infPayments = payments.filter(p => p.influencer_id === inf.id);
-    const totalViews = infPosts.reduce((s,p) => s + (p.views || 0), 0);
-    const totalEng = infPosts.reduce((s,p) => s + (p.likes||0) + (p.comments||0) + (p.shares||0) + (p.reposts||0) + (p.forwards||0) + (p.saves||0), 0);
-    const totalPaid = infPayments.filter(p => p.status === 'paid').reduce((s,p) => s + (parseFloat(p.total_amount) || 0), 0);
-    const collabCount = infPosts.length;
-    // Determine ambassador tier
-    const tierObj = [...tiers].reverse().find(t => collabCount >= t.min_collabs) || tiers[0];
-    const infMilestones = milestones.filter(m => m.influencer_id === inf.id);
-    return { ...inf, totalViews, totalEng, totalPaid, collabCount, tierObj, infMilestones, postCount: infPosts.length };
-  });
-
-  // Sort by total views (leaderboard)
-  const leaderboard = [...infStats].sort((a, b) => b.totalViews - a.totalViews).slice(0, 20);
-
-  container.innerHTML = `
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:24px">
-      <div>
-        <h3 style="margin-bottom:12px">Ambassador Tiers</h3>
-        <div style="display:flex;flex-direction:column;gap:8px">
-          ${tiers.map(t => {
-            const count = infStats.filter(i => i.tierObj?.name === t.name).length;
-            const perks = (() => { try { return JSON.parse(t.perks || '[]'); } catch { return []; } })();
-            return `<div style="padding:16px;background:var(--card-bg);border:1px solid var(--border);border-radius:8px;border-left:4px solid ${t.color}">
-              <div style="display:flex;justify-content:space-between;align-items:center">
-                <div><strong style="color:${t.color}">${t.name}</strong> <span style="color:var(--text-muted);font-size:12px">(${t.min_collabs}+ collabs)</span></div>
-                <span class="badge">${count} influencer${count !== 1 ? 's' : ''}</span>
-              </div>
-              <div style="font-size:12px;color:var(--text-muted);margin-top:4px">+${t.rate_bonus_percent}% rate bonus</div>
-              <div style="font-size:11px;color:var(--text-muted);margin-top:4px">${perks.join(' • ')}</div>
-            </div>`;
-          }).join('')}
-        </div>
-      </div>
-      <div>
-        <h3 style="margin-bottom:12px">Performance Leaderboard</h3>
-        <div class="table-wrapper"><table>
-          <thead><tr><th>#</th><th>Influencer</th><th>Tier</th><th>Posts</th><th>Total Views</th><th>Total Paid</th></tr></thead>
-          <tbody>${leaderboard.map((inf, idx) => `<tr>
-            <td style="font-weight:600;color:${idx < 3 ? 'var(--accent)' : 'var(--text-muted)'}">${idx + 1}</td>
-            <td><strong>${inf.name}</strong><div style="font-size:11px;color:var(--text-muted)">${infTier(inf.followers)}</div></td>
-            <td>${ambassadorBadge(inf.tierObj?.name)}</td>
-            <td>${inf.postCount}</td>
-            <td>${inf.totalViews.toLocaleString()}</td>
-            <td>$${inf.totalPaid.toLocaleString()}</td>
-          </tr>`).join('')}</tbody>
-        </table></div>
-      </div>
-    </div>
-
-    <h3 style="margin-bottom:12px">All Influencers — Ambassador Status</h3>
-    <div class="table-wrapper"><table>
-      <thead><tr>
-        <th data-key="name">Influencer</th>
-        <th>Ambassador Tier</th>
-        <th data-key="postCount">Posts</th>
-        <th data-key="totalViews">Total Views</th>
-        <th data-key="totalEng">Total Engagement</th>
-        <th data-key="totalPaid">Total Paid</th>
-        <th>CPV (per 1K)</th>
-        <th>Milestones</th>
-      </tr></thead>
-      <tbody>${infStats.map(inf => `<tr>
-        <td><strong>${inf.name}</strong><div style="font-size:11px">${inf.handle ? `<a href="${socialProfileUrl(inf.platform, inf.handle)}" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:none">@${inf.handle.replace(/^@/,'')}</a> • ` : ''}${infTier(inf.followers)}</div></td>
-        <td>${ambassadorBadge(inf.tierObj?.name)}<div style="font-size:11px;color:var(--text-muted)">${inf.collabCount}/${(tiers.find(t => t.sort_order === (inf.tierObj?.sort_order || 0) + 1) || { min_collabs: '∞' }).min_collabs} to next tier</div></td>
-        <td>${inf.postCount}</td>
-        <td>${inf.totalViews.toLocaleString()}</td>
-        <td>${inf.totalEng.toLocaleString()}</td>
-        <td>$${inf.totalPaid.toLocaleString()}</td>
-        <td>${cpv(inf.totalPaid, inf.totalViews)}</td>
-        <td>${inf.infMilestones.map(m => `<span class="badge badge-accent" style="font-size:10px;margin:1px" title="${m.description || ''}">${m.label}</span>`).join('') || '<span style="color:var(--text-muted);font-size:12px">—</span>'}</td>
-      </tr>`).join('')}</tbody>
-    </table></div>
-  `;
-  lucide.createIcons({ nameAttr: 'data-lucide' });
-}
-
 // ---- TAB: Outreach ----
 async function renderInfOutreach(container) {
   const [templatesRes, logRes, influencersRes] = await Promise.all([
@@ -2456,7 +2420,7 @@ async function renderInfOutreach(container) {
   function renderBulk(oc) {
     const emailTemplates = templates.filter(t => t.channel === 'email');
     const withEmail = influencers.filter(i => i.email);
-    const stages = ['lead', 'prospect', 'outreach', 'negotiation', 'contracted', 'completed'];
+    const stages = ['prospect', 'outreach', 'negotiation', 'contracted', 'completed'];
     let bulkSelected = new Set();
 
     oc.innerHTML = `
@@ -3030,7 +2994,7 @@ window.editInfluencer = async function(id) {
     const { data } = await sb.from('influencers').select('*').eq('id', id).single();
     inf = data || {};
   }
-  const stages = ['lead', 'prospect', 'outreach', 'negotiation', 'contracted', 'completed'];
+  const stages = ['prospect', 'outreach', 'negotiation', 'contracted', 'completed'];
   const categories = ['food','lifestyle','beauty','fitness','fashion','travel','tech','parenting','health','music','art','other'];
   const contentStyles = ['reels-heavy','story-heavy','photo-focused','long-form-video','live-streams','carousel','mixed'];
 
@@ -7268,19 +7232,27 @@ async function renderEvents(container) {
       </tbody></table></div>`;
     } else if (activeTab === 'invites') {
       tc.innerHTML = `<div class="table-container"><table class="data-table"><thead><tr>
-        <th>Event</th><th>Influencer</th><th>Status</th><th>RSVP Date</th><th>Actions</th>
+        <th>Event</th><th>Influencer</th><th>Status</th><th>Email Sent</th><th>RSVP Date</th><th>Actions</th>
       </tr></thead><tbody>
         ${invites.map(inv => {
           const ev = events.find(e => e.id === inv.event_id);
           const inf = infMap[inv.influencer_id];
-          return `<tr><td>${ev ? ev.name : '#' + inv.event_id}</td><td>${inf ? inf.name : '#' + inv.influencer_id}</td>
+          const emailBadge = inv.email_sent
+            ? `<span class="badge badge-success" title="Sent ${inv.email_sent_at ? new Date(inv.email_sent_at).toLocaleString() : ''}">Sent</span>`
+            : '<span class="badge badge-secondary">Not sent</span>';
+          const canResend = inv.email_sent && (inv.status === 'pending' || inv.status === 'invited');
+          const resendBtn = canResend
+            ? `<button class="btn btn-xs btn-secondary" onclick="resendInviteEmail(${inv.id})" title="Resend invite email"><i data-lucide="mail" style="width:14px;height:14px"></i></button>`
+            : '';
+          return `<tr><td>${ev ? ev.name : '#' + inv.event_id}</td><td>${inf ? inf.name : (inv.name || '#' + inv.influencer_id)}</td>
             <td><select class="form-select form-select-sm" onchange="updateInviteStatus(${inv.id}, this.value)" style="width:120px">
               ${['invited','confirmed','declined','attended','no_show'].map(s => `<option value="${s}" ${inv.status===s?'selected':''}>${s.replace('_',' ')}</option>`).join('')}
             </select></td>
+            <td>${emailBadge}</td>
             <td>${inv.rsvp_date ? new Date(inv.rsvp_date).toLocaleDateString() : '—'}</td>
-            <td><button class="btn btn-xs btn-danger" onclick="deleteInvite(${inv.id})"><i data-lucide="trash-2" style="width:14px;height:14px"></i></button></td></tr>`;
+            <td style="display:flex;gap:4px">${resendBtn}<button class="btn btn-xs btn-danger" onclick="deleteInvite(${inv.id})"><i data-lucide="trash-2" style="width:14px;height:14px"></i></button></td></tr>`;
         }).join('')}
-        ${!invites.length ? '<tr><td colspan="5" class="text-center">No invites yet</td></tr>' : ''}
+        ${!invites.length ? '<tr><td colspan="6" class="text-center">No invites yet</td></tr>' : ''}
       </tbody></table></div>`;
     }
     lucide.createIcons({ nameAttr: 'data-lucide' });
@@ -7378,29 +7350,161 @@ window.deleteEvent = async function(id) {
   toast('Event deleted', 'success'); navigate('events');
 };
 
+// Generate a random token for RSVP links
+function generateToken() {
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+  let token = '';
+  for (let i = 0; i < 32; i++) token += chars.charAt(Math.floor(Math.random() * chars.length));
+  return token;
+}
+
+// Build the HTML email body for an event invite
+function buildInviteEmail(event, influencerName, rsvpToken) {
+  const baseUrl = window.location.origin;
+  const confirmUrl = `${baseUrl}/api/rsvp?token=${rsvpToken}&action=confirm`;
+  const declineUrl = `${baseUrl}/api/rsvp?token=${rsvpToken}&action=decline`;
+  const eventDate = event.date || '';
+  const eventTime = event.time ? ` at ${event.time}` : '';
+  const eventLocation = event.location || '';
+
+  return `
+    <div style="font-family:'Inter',Arial,sans-serif;max-width:560px;margin:0 auto;padding:0;color:#333">
+      <div style="background:linear-gradient(135deg,#1a1a2e,#16213e);padding:32px 24px;border-radius:12px 12px 0 0;text-align:center">
+        <h1 style="color:#fff;margin:0;font-size:22px;font-weight:700">You're Invited!</h1>
+        <p style="color:#a0aec0;margin:8px 0 0;font-size:14px">Ivea Restaurant Group</p>
+      </div>
+      <div style="background:#fff;padding:32px 24px;border:1px solid #e2e8f0;border-top:none">
+        <p style="font-size:15px;line-height:1.6;margin:0 0 16px">Hi ${influencerName},</p>
+        <p style="font-size:15px;line-height:1.6;margin:0 0 20px">We'd love to have you at an upcoming event:</p>
+        <div style="background:#f8f9fa;border-radius:8px;padding:20px;margin:0 0 24px;border-left:4px solid #4f98a3">
+          <h2 style="margin:0 0 8px;font-size:18px;color:#1a1a2e">${event.name || 'Event'}</h2>
+          ${eventDate ? `<p style="margin:4px 0;font-size:14px;color:#555">📅 ${eventDate}${eventTime}</p>` : ''}
+          ${eventLocation ? `<p style="margin:4px 0;font-size:14px;color:#555">📍 ${eventLocation}</p>` : ''}
+          ${event.description ? `<p style="margin:12px 0 0;font-size:13px;color:#666;line-height:1.5">${event.description}</p>` : ''}
+        </div>
+        <p style="font-size:14px;color:#555;margin:0 0 24px;text-align:center">Can you make it? Let us know:</p>
+        <div style="text-align:center;margin:0 0 24px">
+          <a href="${confirmUrl}" style="display:inline-block;background:#22c55e;color:#fff;padding:12px 32px;border-radius:8px;text-decoration:none;font-weight:600;font-size:15px;margin:0 8px">✓ I'll Be There</a>
+          <a href="${declineUrl}" style="display:inline-block;background:#ef4444;color:#fff;padding:12px 32px;border-radius:8px;text-decoration:none;font-weight:600;font-size:15px;margin:0 8px">✗ Can't Make It</a>
+        </div>
+        <p style="font-size:12px;color:#999;text-align:center;margin:0">Just click a button above — no login required.</p>
+      </div>
+      <div style="text-align:center;padding:16px;font-size:11px;color:#999">
+        Ivea Restaurant Group • Los Angeles, CA
+      </div>
+    </div>
+  `;
+}
+
+// Send a single invite email
+async function sendInviteEmail(event, influencer, rsvpToken) {
+  const emailBody = buildInviteEmail(event, influencer.name, rsvpToken);
+  try {
+    const resp = await fetch('/api/send-email', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        to: influencer.email,
+        subject: `You're Invited: ${event.name || 'Event'} — Ivea Restaurant Group`,
+        body: emailBody,
+      }),
+    });
+    const result = await resp.json();
+    return { success: resp.ok, ...result };
+  } catch (err) {
+    console.error('Send invite email error:', err);
+    return { success: false, error: err.message };
+  }
+}
+
+// Resend an invite email
+window.resendInviteEmail = async function(inviteId) {
+  const { data: inv } = await sb.from('event_invites').select('*').eq('id', inviteId).single();
+  if (!inv) return toast('Invite not found', 'error');
+  const { data: ev } = await sb.from('events').select('*').eq('id', inv.event_id).single();
+  const { data: inf } = await sb.from('influencers').select('id,name,handle,email').eq('id', inv.influencer_id).single();
+  if (!inf?.email) return toast(`${inf?.name || 'Influencer'} has no email address`, 'error');
+
+  let token = inv.rsvp_token;
+  if (!token) {
+    token = generateToken();
+    await sb.from('event_invites').update({ rsvp_token: token }).eq('id', inviteId);
+  }
+
+  toast('Sending invite email...', 'info');
+  const result = await sendInviteEmail(ev, inf, token);
+  if (result.success) {
+    await sb.from('event_invites').update({ email_sent: true, email_sent_at: new Date().toISOString() }).eq('id', inviteId);
+    toast(`Invite resent to ${inf.name}`, 'success');
+  } else {
+    toast(`Failed to send: ${result.error || 'Unknown error'}. Check Settings → Email for SMTP config.`, 'error');
+  }
+};
+
 window.manageEventInvites = async function(eventId) {
   const { data: ev } = await sb.from('events').select('*').eq('id', eventId).single();
   const { data: existingInvites } = await sb.from('event_invites').select('*').eq('event_id', eventId);
-  const { data: allInf } = await sb.from('influencers').select('id, name, handle');
+  const { data: allInf } = await sb.from('influencers').select('id, name, handle, email');
   const existing = new Set((existingInvites || []).map(i => i.influencer_id));
 
   openModal(`Invite Influencers — ${ev?.name || ''}`, `
     <div style="max-height:400px;overflow-y:auto">
-      ${(allInf || []).map(inf => `<label style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--border)">
-        <input type="checkbox" class="inv-check" value="${inf.id}" ${existing.has(inf.id) ? 'checked disabled' : ''}>
-        <span>${inf.name}</span><span style="color:var(--text-muted);font-size:12px">@${inf.handle || ''}</span>
-        ${existing.has(inf.id) ? '<span class="badge badge-info" style="margin-left:auto">Already invited</span>' : ''}
-      </label>`).join('')}
+      ${(allInf || []).map(inf => {
+        const hasEmail = !!inf.email;
+        return `<label style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--border);${!hasEmail && !existing.has(inf.id) ? 'opacity:0.5' : ''}">
+          <input type="checkbox" class="inv-check" value="${inf.id}" ${existing.has(inf.id) ? 'checked disabled' : ''} ${!hasEmail && !existing.has(inf.id) ? 'disabled' : ''}>
+          <span>${inf.name}</span><span style="color:var(--text-muted);font-size:12px">@${inf.handle || ''}</span>
+          ${existing.has(inf.id) ? '<span class="badge badge-info" style="margin-left:auto">Already invited</span>' : ''}
+          ${!hasEmail && !existing.has(inf.id) ? '<span class="badge" style="margin-left:auto;background:#fef2f2;color:#ef4444;font-size:10px">No email</span>' : ''}
+        </label>`;
+      }).join('')}
     </div>
-  `, `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button><button class="btn btn-primary" id="send-invites-btn">Send Invites</button>`);
+    <p style="font-size:11px;color:var(--text-muted);margin-top:8px">An invitation email with RSVP buttons will be sent to each selected influencer.</p>
+  `, `<button class="btn btn-secondary" onclick="closeModal()">Cancel</button><button class="btn btn-primary" id="send-invites-btn"><i data-lucide="send" style="width:14px;height:14px"></i> Send Invites</button>`);
+  lucide.createIcons({ nameAttr: 'data-lucide' });
 
   $('#send-invites-btn').onclick = async () => {
     const newIds = [...document.querySelectorAll('.inv-check:checked:not(:disabled)')].map(cb => parseInt(cb.value));
     if (!newIds.length) return toast('Select influencers to invite', 'error');
-    const rows = newIds.map(influencer_id => ({ event_id: eventId, influencer_id, status: 'invited' }));
-    await sb.from('event_invites').insert(rows);
-    closeModal(); toast(`Invited ${newIds.length} influencer(s)`, 'success');
-    await logActivity('invite_event', `Invited ${newIds.length} to ${ev?.name}`);
+
+    const btn = $('#send-invites-btn');
+    btn.disabled = true;
+    btn.textContent = 'Sending...';
+
+    let sent = 0;
+    let failed = 0;
+
+    for (const infId of newIds) {
+      const inf = (allInf || []).find(i => i.id === infId);
+      if (!inf) continue;
+
+      const token = generateToken();
+      // Create the invite record with RSVP token
+      await sb.from('event_invites').insert({
+        event_id: eventId,
+        influencer_id: infId,
+        status: 'invited',
+        rsvp_token: token,
+        email_sent: false,
+      });
+
+      // Send the actual email if they have an email address
+      if (inf.email) {
+        const result = await sendInviteEmail(ev, inf, token);
+        if (result.success) {
+          await sb.from('event_invites').update({ email_sent: true, email_sent_at: new Date().toISOString() }).eq('rsvp_token', token);
+          sent++;
+        } else {
+          console.error(`Failed to email ${inf.name}:`, result.error);
+          failed++;
+        }
+      }
+    }
+
+    closeModal();
+    if (sent > 0) toast(`Invited ${sent} influencer(s) — emails sent!`, 'success');
+    if (failed > 0) toast(`${failed} email(s) failed to send. Check Settings → Email.`, 'error');
+    await logActivity('invite_event', `Invited ${newIds.length} to ${ev?.name} (${sent} emails sent)`);
     navigate('events');
   };
 };

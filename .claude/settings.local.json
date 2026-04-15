@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(awk '/^async function|^function/ {f=$3; s=NR} /^}/ && f {print f, NR-s; f=\"\"}' /Users/chrisyum/Documents/GitHub/ivea-marketing-hub/public/app.js)",
+      "Bash(sort -k2 -rn)",
+      "Bash(head -30 /Users/chrisyum/Documents/GitHub/ivea-marketing-hub/api/*.js)",
+      "Bash(wc -l /Users/chrisyum/Documents/GitHub/ivea-marketing-hub/api/*.js)",
+      "Bash(wc -l /Users/chrisyum/Documents/GitHub/ivea-marketing-hub/sql/*.sql)"
+    ]
+  }
+}
